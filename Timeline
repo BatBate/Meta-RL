@@ -1,0 +1,11 @@
+# RL
+Course project for Deep RL
+
+9 Weeks in total
+Reserve 1 week for reporting stuff
+
+Week 1: Read PyTorch source code for SNAIL and TensorFlow source code for LSTM
+Week 2: Study basic building blocks for both Model
+Week 3-4: Implement SNAIL
+Week 5-6: Implement RL^2
+
