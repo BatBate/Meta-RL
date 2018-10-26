@@ -5,7 +5,12 @@ Course project for Deep RL
 Reserve 1 week for reporting stuff
 
 Week 1: Read PyTorch source code for SNAIL and TensorFlow source code for LSTM
+  - SNAIL paper 
+  - A3C paper
+  
 Week 2: Study and implement basic building blocks for both Model
+  - TODO: DenseBlock, TCBlock, AttentionBlock
+  - TODO: Read code: https://github.com/liampetti/A3C-LSTM, https://github.com/deepmind/learning-to-learn
 Week 3-4: Implement SNAIL
 Week 5-6: Implement RL^2
 
