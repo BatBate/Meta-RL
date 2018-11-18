@@ -24,10 +24,12 @@ class PPOBuffer:
         self.ret_buf = np.zeros(size, dtype=np.float32)
         self.val_buf = np.zeros(size, dtype=np.float32)
         self.logp_buf = np.zeros(size, dtype=np.float32)
+        self.pi_rnn_state_buf = np.zeros((size, 256), dtype=np.float32)
+        self.v_rnn_state_buf = np.zeros((size, 256), dtype=np.float32)
         self.gamma, self.lam = gamma, lam
         self.ptr, self.path_start_idx, self.max_size = 0, 0, size
 
-    def store(self, obs, act, rew, val, logp):
+    def store(self, obs, act, rew, val, logp, pi_rnn_state, v_rnn_state):
         """
         Append one timestep of agent-environment interaction to the buffer.
         """
@@ -37,6 +39,8 @@ class PPOBuffer:
         self.rew_buf[self.ptr] = rew
         self.val_buf[self.ptr] = val
         self.logp_buf[self.ptr] = logp
+        self.pi_rnn_state_buf[self.ptr] = pi_rnn_state
+        self.v_rnn_state_buf[self.ptr] = v_rnn_state
         self.ptr += 1
 
     def finish_path(self, last_val=0):
@@ -80,7 +84,7 @@ class PPOBuffer:
         adv_mean, adv_std = mpi_statistics_scalar(self.adv_buf)
         self.adv_buf = (self.adv_buf - adv_mean) / adv_std
         return [self.obs_buf, self.act_buf, self.adv_buf, 
-                self.ret_buf, self.logp_buf]
+                self.ret_buf, self.logp_buf, self.rew_buf.reshape(-1, 1), self.pi_rnn_state_buf, self.v_rnn_state_buf]
 
 
 """
@@ -176,7 +180,6 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     env = env_fn()
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape
-    print(env.action_space.shape)
     
     # Share information about action space with policy architecture
     ac_kwargs['action_space'] = env.action_space
@@ -186,15 +189,14 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     rew_ph, adv_ph, ret_ph, logp_old_ph = core.placeholders(1, None, None, None)
     pi_rnn_state_ph = tf.placeholder(tf.float32, [1, 256])
     v_rnn_state_ph = tf.placeholder(tf.float32, [1, 256])
-#    print(x_ph.shape)
-#    print(a_ph.shape)
-#    print(rew_ph.shape)
     # Main outputs from computation graph
 #    pi, logp, logp_pi, v = actor_critic(x_ph, a_ph, **ac_kwargs)
     pi, logp, logp_pi, v, pi_rnn_state, v_rnn_state = actor_critic(x_ph, a_ph, rew_ph, pi_rnn_state_ph, v_rnn_state_ph, 256, action_space=env.action_space)
 
     # Need all placeholders in *this* order later (to zip with data from buffer)
-    all_phs = [x_ph, a_ph, adv_ph, ret_ph, logp_old_ph]
+    all_phs = [x_ph, a_ph, adv_ph, ret_ph, logp_old_ph, rew_ph, pi_rnn_state_ph, v_rnn_state_ph]
+    for ph in all_phs:
+        print(ph.shape)
 
     # Every step, get: action, value, and logprob
     get_action_ops = [pi, v, logp_pi, pi_rnn_state, v_rnn_state]
@@ -234,6 +236,9 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     def update():
         inputs = {k:v for k,v in zip(all_phs, buf.get())}
+        for key in inputs:
+            print(inputs[key].shape)
+        print(inputs)
         pi_l_old, v_l_old, ent = sess.run([pi_loss, v_loss, approx_ent], feed_dict=inputs)
         
         # Training
@@ -266,7 +271,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         for t in range(local_steps_per_epoch):
             a, v_t, logp_t, pi_rnn_state_t, v_rnn_state_t = sess.run(get_action_ops, feed_dict={x_ph: o.reshape(1,-1), a_ph: last_a.reshape(-1,), rew_ph: last_r.reshape(-1,1), pi_rnn_state_ph: last_pi_rnn_state, v_rnn_state_ph: last_v_rnn_state})
             # save and log
-            buf.store(o, a, r, v_t, logp_t)
+            buf.store(o, a, r, v_t, logp_t, pi_rnn_state_t, v_rnn_state_t)
             logger.store(VVals=v_t)
 
             o, r, d, _ = env.step(a[0])
