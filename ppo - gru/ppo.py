@@ -24,12 +24,13 @@ class PPOBuffer:
         self.ret_buf = np.zeros(size, dtype=np.float32)
         self.val_buf = np.zeros(size, dtype=np.float32)
         self.logp_buf = np.zeros(size, dtype=np.float32)
-        self.pi_rnn_state_buf = np.zeros((size, 256), dtype=np.float32)
-        self.v_rnn_state_buf = np.zeros((size, 256), dtype=np.float32)
+#        self.pi_rnn_state_buf = np.zeros((size, 256), dtype=np.float32)
+#        self.v_rnn_state_buf = np.zeros((size, 256), dtype=np.float32)
         self.gamma, self.lam = gamma, lam
         self.ptr, self.path_start_idx, self.max_size = 0, 0, size
 
-    def store(self, obs, act, rew, val, logp, pi_rnn_state, v_rnn_state):
+#    def store(self, obs, act, rew, val, logp, pi_rnn_state, v_rnn_state):
+    def store(self, obs, act, rew, val, logp):
         """
         Append one timestep of agent-environment interaction to the buffer.
         """
@@ -39,8 +40,8 @@ class PPOBuffer:
         self.rew_buf[self.ptr] = rew
         self.val_buf[self.ptr] = val
         self.logp_buf[self.ptr] = logp
-        self.pi_rnn_state_buf[self.ptr] = pi_rnn_state
-        self.v_rnn_state_buf[self.ptr] = v_rnn_state
+#        self.pi_rnn_state_buf[self.ptr] = pi_rnn_state
+#        self.v_rnn_state_buf[self.ptr] = v_rnn_state
         self.ptr += 1
 
     def finish_path(self, last_val=0):
@@ -84,7 +85,9 @@ class PPOBuffer:
         adv_mean, adv_std = mpi_statistics_scalar(self.adv_buf)
         self.adv_buf = (self.adv_buf - adv_mean) / adv_std
         return [self.obs_buf, self.act_buf, self.adv_buf, 
-                self.ret_buf, self.logp_buf, self.rew_buf.reshape(-1, 1), self.pi_rnn_state_buf, self.v_rnn_state_buf]
+                self.ret_buf, self.logp_buf, self.rew_buf.reshape(-1, 1)]
+#        return [self.obs_buf, self.act_buf, self.adv_buf, 
+#                self.ret_buf, self.logp_buf, self.rew_buf.reshape(-1, 1), self.pi_rnn_state_buf, self.v_rnn_state_buf]
 
 
 """
@@ -194,9 +197,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     pi, logp, logp_pi, v, pi_rnn_state, v_rnn_state = actor_critic(x_ph, a_ph, rew_ph, pi_rnn_state_ph, v_rnn_state_ph, 256, action_space=env.action_space)
 
     # Need all placeholders in *this* order later (to zip with data from buffer)
-    all_phs = [x_ph, a_ph, adv_ph, ret_ph, logp_old_ph, rew_ph, pi_rnn_state_ph, v_rnn_state_ph]
-    for ph in all_phs:
-        print(ph.shape)
+#    all_phs = [x_ph, a_ph, adv_ph, ret_ph, logp_old_ph, rew_ph, pi_rnn_state_ph, v_rnn_state_ph]
+    all_phs = [x_ph, a_ph, adv_ph, ret_ph, logp_old_ph, rew_ph]
 
     # Every step, get: action, value, and logprob
     get_action_ops = [pi, v, logp_pi, pi_rnn_state, v_rnn_state]
@@ -236,9 +238,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     def update():
         inputs = {k:v for k,v in zip(all_phs, buf.get())}
-        for key in inputs:
-            print(inputs[key].shape)
-        print(inputs)
+        inputs[pi_rnn_state_ph] = np.zeros((1, 256), np.float32)
+        inputs[v_rnn_state_ph] = np.zeros((1, 256), np.float32)
         pi_l_old, v_l_old, ent = sess.run([pi_loss, v_loss, approx_ent], feed_dict=inputs)
         
         # Training
@@ -271,7 +272,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         for t in range(local_steps_per_epoch):
             a, v_t, logp_t, pi_rnn_state_t, v_rnn_state_t = sess.run(get_action_ops, feed_dict={x_ph: o.reshape(1,-1), a_ph: last_a.reshape(-1,), rew_ph: last_r.reshape(-1,1), pi_rnn_state_ph: last_pi_rnn_state, v_rnn_state_ph: last_v_rnn_state})
             # save and log
-            buf.store(o, a, r, v_t, logp_t, pi_rnn_state_t, v_rnn_state_t)
+#            buf.store(o, a, r, v_t, logp_t, pi_rnn_state_t, v_rnn_state_t)
+            buf.store(o, a, r, v_t, logp_t)
             logger.store(VVals=v_t)
 
             o, r, d, _ = env.step(a[0])
@@ -327,7 +329,6 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--seed', '-s', type=int, default=0)
     parser.add_argument('--cpu', type=int, default=4)
-#    parser.add_argument('--steps', type=int, default=4000)
     parser.add_argument('--steps', type=int, default=100)
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--exp_name', type=str, default='ppo')
