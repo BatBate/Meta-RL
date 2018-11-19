@@ -104,7 +104,7 @@ def mlp_actor_critic(x, a, hidden_sizes=(64,64), activation=tf.tanh,
 
 def gru(x, a, rew, rnn_state, n_hidden, activation, output_size):
     hidden = tf.concat([x,a,rew],1)
-    gru_cell = tf.nn.rnn_cell.GRUCell(n_hidden, activation=activation)
+    gru_cell = tf.nn.rnn_cell.GRUCell(n_hidden, activation=activation, kernel_initializer=tf.initializers.orthogonal(), bias_initializer=tf.initializers.zeros())
     rnn_in = tf.expand_dims(hidden, [0])
     step_size = tf.shape(rew)[:1]
     gru_outputs, gru_state = tf.nn.dynamic_rnn(
@@ -112,7 +112,7 @@ def gru(x, a, rew, rnn_state, n_hidden, activation, output_size):
         time_major=False)
     state_out = gru_state[:1, :]
     rnn_out = tf.reshape(gru_outputs, [-1, n_hidden])
-    return tf.layers.dense(rnn_out, units=output_size), state_out
+    return tf.layers.dense(rnn_out, units=output_size, kernel_initializer=tf.initializers.glorot_normal(), bias_initializer=tf.zeros_initializer(),), state_out
     
 def gru_categorical_policy(x, a, rew, rnn_state, n_hidden, activation, output_size, action_space):
     act_dim = action_space.n
@@ -125,9 +125,6 @@ def gru_categorical_policy(x, a, rew, rnn_state, n_hidden, activation, output_si
 
 def gru_actor_critic(x, a, rew, pi_rnn_state, v_rnn_state, n_hidden, activation=tf.nn.relu, 
                      output_activation=None, policy=None, action_space=None):
-#    print(x.shape)
-#    print(a.shape)
-#    print(rew.shape)
     # only consider discrete experiment now
     if policy is None and isinstance(action_space, Discrete):
         policy = gru_categorical_policy
