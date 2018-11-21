@@ -13,8 +13,8 @@ def main():
     env = gym.make('CartPole-v0')
     env.seed(0)
     ob_space = env.observation_space
-    Policy = Policy_net('policy', env)
-    Old_Policy = Policy_net('old_policy', env)
+    Policy = PolicyGRUNet('policy', env)
+    Old_Policy = PolicyGRUNet('old_policy', env)
     PPO = PPOTrain(Policy, Old_Policy, gamma=GAMMA)
     saver = tf.train.Saver()
 
