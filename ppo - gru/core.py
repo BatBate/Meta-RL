@@ -2,6 +2,7 @@ import numpy as np
 import tensorflow as tf
 import scipy.signal
 from gym.spaces import Box, Discrete
+from gru import GRU
 
 EPS = 1e-8
 
@@ -103,8 +104,10 @@ def mlp_actor_critic(x, a, hidden_sizes=(64,64), activation=tf.tanh,
     return pi, logp, logp_pi, v
 
 def gru(x, a, rew, rnn_state, n_hidden, activation, output_size):
-    hidden = tf.concat([x,a,rew],1)
-    gru_cell = tf.nn.rnn_cell.GRUCell(n_hidden, activation=activation, kernel_initializer=tf.initializers.orthogonal(), bias_initializer=tf.initializers.zeros())
+    hidden = tf.concat([x, a, rew], 1)
+    # use layer normalization for gru
+    gru_cell = GRU(n_hidden, activation=activation)
+#    gru_cell = tf.nn.rnn_cell.GRUCell(n_hidden, activation=activation, kernel_initializer=tf.initializers.orthogonal(), bias_initializer=tf.initializers.zeros())
     rnn_in = tf.expand_dims(hidden, [0])
     step_size = tf.shape(rew)[:1]
     gru_outputs, gru_state = tf.nn.dynamic_rnn(
@@ -112,7 +115,10 @@ def gru(x, a, rew, rnn_state, n_hidden, activation, output_size):
         time_major=False)
     state_out = gru_state[:1, :]
     rnn_out = tf.reshape(gru_outputs, [-1, n_hidden])
-    return tf.layers.dense(rnn_out, units=output_size, kernel_initializer=tf.initializers.glorot_normal(), bias_initializer=tf.zeros_initializer(),), state_out
+    out = tf.layers.dense(rnn_out, units=output_size, kernel_initializer=tf.initializers.glorot_normal(), bias_initializer=tf.zeros_initializer(),)
+    # layer normalization for dense layer
+    norm_out = tf.contrib.layers.layer_norm(out)
+    return norm_out, state_out
     
 def gru_categorical_policy(x, a, rew, rnn_state, n_hidden, activation, output_size, action_space):
     act_dim = action_space.n

@@ -24,12 +24,9 @@ class PPOBuffer:
         self.ret_buf = np.zeros(size, dtype=np.float32)
         self.val_buf = np.zeros(size, dtype=np.float32)
         self.logp_buf = np.zeros(size, dtype=np.float32)
-#        self.pi_rnn_state_buf = np.zeros((size, 256), dtype=np.float32)
-#        self.v_rnn_state_buf = np.zeros((size, 256), dtype=np.float32)
         self.gamma, self.lam = gamma, lam
         self.ptr, self.path_start_idx, self.max_size = 0, 0, size
 
-#    def store(self, obs, act, rew, val, logp, pi_rnn_state, v_rnn_state):
     def store(self, obs, act, rew, val, logp):
         """
         Append one timestep of agent-environment interaction to the buffer.
@@ -40,8 +37,6 @@ class PPOBuffer:
         self.rew_buf[self.ptr] = rew
         self.val_buf[self.ptr] = val
         self.logp_buf[self.ptr] = logp
-#        self.pi_rnn_state_buf[self.ptr] = pi_rnn_state
-#        self.v_rnn_state_buf[self.ptr] = v_rnn_state
         self.ptr += 1
 
     def finish_path(self, last_val=0):
@@ -86,8 +81,6 @@ class PPOBuffer:
         self.adv_buf = (self.adv_buf - adv_mean) / adv_std
         return [self.obs_buf, self.act_buf, self.adv_buf, 
                 self.ret_buf, self.logp_buf, self.rew_buf.reshape(-1, 1)]
-#        return [self.obs_buf, self.act_buf, self.adv_buf, 
-#                self.ret_buf, self.logp_buf, self.rew_buf.reshape(-1, 1), self.pi_rnn_state_buf, self.v_rnn_state_buf]
 
 
 """
@@ -193,12 +186,12 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     pi_rnn_state_ph = tf.placeholder(tf.float32, [1, 256])
     v_rnn_state_ph = tf.placeholder(tf.float32, [1, 256])
     # Main outputs from computation graph
-#    pi, logp, logp_pi, v = actor_critic(x_ph, a_ph, **ac_kwargs)
     pi, logp, logp_pi, v, pi_rnn_state, v_rnn_state = actor_critic(x_ph, a_ph, rew_ph, pi_rnn_state_ph, v_rnn_state_ph, 256, action_space=env.action_space)
 
     # Need all placeholders in *this* order later (to zip with data from buffer)
-#    all_phs = [x_ph, a_ph, adv_ph, ret_ph, logp_old_ph, rew_ph, pi_rnn_state_ph, v_rnn_state_ph]
     all_phs = [x_ph, a_ph, adv_ph, ret_ph, logp_old_ph, rew_ph]
+#    for ph in all_phs:
+#        print(ph.shape)
 
     # Every step, get: action, value, and logprob
     get_action_ops = [pi, v, logp_pi, pi_rnn_state, v_rnn_state]
@@ -269,11 +262,13 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         last_r = np.array(r)
         last_pi_rnn_state = np.zeros((1, 256), np.float32)
         last_v_rnn_state = np.zeros((1, 256), np.float32)
-        env.reset_task(env.sample_tasks(1)[0])
+        means = env.sample_tasks(1)[0]
+#        print('task means:', means)
+        env.reset_task(means)
         for t in range(local_steps_per_epoch):
             a, v_t, logp_t, pi_rnn_state_t, v_rnn_state_t = sess.run(get_action_ops, feed_dict={x_ph: o.reshape(1,-1), a_ph: last_a.reshape(-1,), rew_ph: last_r.reshape(-1,1), pi_rnn_state_ph: last_pi_rnn_state, v_rnn_state_ph: last_v_rnn_state})
+#            print('action:', a)
             # save and log
-#            buf.store(o, a, r, v_t, logp_t, pi_rnn_state_t, v_rnn_state_t)
             buf.store(o, a, r, v_t, logp_t)
             logger.store(VVals=v_t)
 
@@ -322,32 +317,30 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
 if __name__ == '__main__':
     tf.reset_default_graph()
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--env', type=str, default='HalfCheetah-v2')
-    parser.add_argument('--hid', type=int, default=64)
-    parser.add_argument('--l', type=int, default=2)
-    parser.add_argument('--gamma', type=float, default=0.99)
-    parser.add_argument('--seed', '-s', type=int, default=0)
-    parser.add_argument('--cpu', type=int, default=4)
-    parser.add_argument('--steps', type=int, default=100)
-    parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--exp_name', type=str, default='ppo')
-    args = parser.parse_args()
-
-#    mpi_fork(args.cpu)  # run parallel code with mpi
-
+    exp_name = 'ppo'
+    num_arms = 5
+    env = BernoulliBanditEnv
+    env_fn = env(num_arms)
+    actor_critic = core.gru_actor_critic
+    ac_kwargs=dict()
+    seed = 0
+    gru_units = 256
+    steps_per_epoch = 100
+    epochs=2500
+    gamma=0.99
+    clip_ratio=0.2
+    pi_lr=3e-4
+    vf_lr=1e-3
+    train_pi_iters=1000
+    train_v_iters=1000
+    lam=0.3
+    max_ep_len=1000
+    target_kl=0.01
+    logger_kwargs=dict()
+    save_freq=10
     from run_utils import setup_logger_kwargs
-    logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
-#    ppo(lambda : gym.make(args.env), actor_critic=core.mlp_actor_critic,
-#        ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
-#        seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
-#        logger_kwargs=logger_kwargs)
-#    ppo(lambda : BernoulliBanditEnv(2), actor_critic=core.mlp_actor_critic,
-#        ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
-#        seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
-#        logger_kwargs=logger_kwargs)
-    ppo(lambda : BernoulliBanditEnv(2), actor_critic=core.gru_actor_critic,
-        ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
-        seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
-        logger_kwargs=logger_kwargs)
+    logger_kwargs = setup_logger_kwargs(exp_name, seed)
+    ppo(lambda: env_fn, actor_critic, ac_kwargs, seed, 
+        steps_per_epoch, epochs, gamma, clip_ratio, pi_lr,
+        vf_lr, train_pi_iters, train_v_iters, lam, max_ep_len,
+        target_kl, logger_kwargs, save_freq)

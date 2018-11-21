@@ -102,4 +102,3 @@ class PPOTrain:
         for t in reversed(range(len(gaes) - 1)):  # is T-1, where T is time step which run policy
             gaes[t] = gaes[t] + self.gamma * gaes[t + 1]
         return gaes
-

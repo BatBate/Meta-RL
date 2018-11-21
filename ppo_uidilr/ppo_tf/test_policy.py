@@ -26,6 +26,7 @@ def main():
         success_num = 0
 
         for iteration in range(ITERATION):  # episode
+            print('debuging...')
             observations = []
             actions = []
             v_preds = []
