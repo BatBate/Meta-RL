@@ -303,7 +303,11 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                 buf.store(o, a, r, v_t, logp_t)
                 logger.store(VVals=v_t)
 
-                o, r, d, _ = env.step(a[0][0])
+                try:
+                    o, r, d, _ = env.step(a[0][0])
+                except:
+                    print(a)
+                    raise AssertionError
                 action_dict[a[0][0]] += 1
 
                 old_a = np.array(a).reshape(1,1)
