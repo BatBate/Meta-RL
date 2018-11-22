@@ -198,8 +198,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     v_state_ph = tf.placeholder(dtype=tf.float32, shape=( None, NUM_GRU_UNITS), name='v_state_ph')
 
     # Initialize rnn states for pi and v
-    pi_state_t = np.zeros(( 1, NUM_GRU_UNITS))
-    v_state_t = np.zeros(( 1, NUM_GRU_UNITS))
+
 
     # Main outputs from computation graph
     pi, logp, logp_pi, v, new_pi_state, new_v_state = actor_critic(x_ph, a_ph, rew_ph, pi_state_ph, v_state_ph, NUM_GRU_UNITS, action_space=env.action_space)
@@ -291,7 +290,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
             env.reset_task(means)
             task_avg = 0.0
-
+            pi_state_t = np.zeros((1, NUM_GRU_UNITS))
+            v_state_t = np.zeros((1, NUM_GRU_UNITS))
             for step in range(steps_per_trial):
                 a, v_t, logp_t, pi_state_t, v_state_t = sess.run(get_action_ops,
                                                                  feed_dict={x_ph: o.reshape(1, 1,-1),
