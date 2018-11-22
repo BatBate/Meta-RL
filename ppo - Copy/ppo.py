@@ -7,6 +7,8 @@ from logx import EpochLogger
 from mpi_tf import MpiAdamOptimizer, sync_all_params
 from mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
 from bandit import BernoulliBanditEnv, GaussianBanditEnv
+from collections import defaultdict
+
 NUM_GRU_UNITS = 256
 
 
@@ -81,8 +83,8 @@ class PPOBuffer:
         adv_mean, adv_std = mpi_statistics_scalar(self.adv_buf)
         self.adv_buf = (self.adv_buf - adv_mean) / adv_std
 
-        return [self.obs_buf, self.act_buf, self.adv_buf, 
-                self.ret_buf, self.logp_buf, self.rew_buf.reshape(-1, 1)]
+        return [self.obs_buf.reshape(trials_per_epoch, steps_per_trial, 1), self.act_buf.reshape(trials_per_epoch, steps_per_trial), self.adv_buf.reshape(trials_per_epoch, steps_per_trial),
+                self.ret_buf.reshape(trials_per_epoch, steps_per_trial), self.logp_buf.reshape(trials_per_epoch, steps_per_trial), self.rew_buf.reshape((trials_per_epoch, steps_per_trial, 1))]
 
 
 """
@@ -93,7 +95,7 @@ with early stopping based on approximate KL
 
 """
 def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
-        steps_per_epoch=100, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
+        trials_per_epoch=2500, steps_per_trial=100, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
         vf_lr=1e-3, train_pi_iters=1000, train_v_iters=80, lam=0.97, max_ep_len=1000,
         target_kl=0.01, logger_kwargs=dict(), save_freq=10):
     """
@@ -184,10 +186,16 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     ac_kwargs['action_space'] = env.action_space
 
     # Inputs to computation graph
-    x_ph, a_ph = core.placeholders_from_spaces(env.observation_space, env.action_space)
-    adv_ph, ret_ph, logp_old_ph, rew_ph = core.placeholders(None, None, None, 1)
-    pi_state_ph = tf.placeholder(dtype=tf.float32, shape=( 1, NUM_GRU_UNITS))
-    v_state_ph = tf.placeholder(dtype=tf.float32, shape=( 1, NUM_GRU_UNITS))
+    # x_ph, a_ph = core.placeholders_from_spaces(env.observation_space, env.action_space)
+    x_ph = tf.placeholder(dtype=tf.float32, shape=(None, None, 1), name='x_ph')
+    a_ph = tf.placeholder(dtype=tf.int32, shape=(None, None), name='a_ph')
+    # adv_ph, ret_ph, logp_old_ph, rew_ph = core.placeholders(None, None, None, 1)
+    adv_ph = tf.placeholder(dtype=tf.float32, shape=(None, None), name='adv_ph')
+    ret_ph = tf.placeholder(dtype=tf.float32, shape=(None, None), name='ret_ph')
+    logp_old_ph = tf.placeholder(dtype=tf.float32, shape=(None, None), name='logp_old_ph')
+    rew_ph = tf.placeholder(dtype=tf.float32, shape=(None, None, 1), name='rew_ph')
+    pi_state_ph = tf.placeholder(dtype=tf.float32, shape=( None, NUM_GRU_UNITS), name='pi_state_ph')
+    v_state_ph = tf.placeholder(dtype=tf.float32, shape=( None, NUM_GRU_UNITS), name='v_state_ph')
 
     # Initialize rnn states for pi and v
     pi_state_t = np.zeros(( 1, NUM_GRU_UNITS))
@@ -203,6 +211,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     get_action_ops = [pi, v, logp_pi, new_pi_state, new_v_state]
 
     # Experience buffer
+    steps_per_epoch = trials_per_epoch * steps_per_trial
     local_steps_per_epoch = int(steps_per_epoch / num_procs())
     buf = PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
 
@@ -237,8 +246,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     def update():
         inputs = {k:v for k,v in zip(all_phs, buf.get())}
-        inputs[pi_state_ph] = pi_state_t
-        inputs[v_state_ph] = v_state_t
+        inputs[pi_state_ph] = np.zeros((trials_per_epoch, NUM_GRU_UNITS))
+        inputs[v_state_ph] = np.zeros((trials_per_epoch, NUM_GRU_UNITS))
         pi_l_old, v_l_old, ent = sess.run([pi_loss, v_loss, approx_ent], feed_dict=inputs)
         print(pi_l_old, v_l_old)
         # Training
@@ -256,6 +265,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             sess.run(train_v, feed_dict=inputs)
 
         # Log changes from update
+        import datetime
+        print(f'finish one batch training at {datetime.datetime.now()}')
         pi_l_new, v_l_new, kl, cf = sess.run([pi_loss, v_loss, approx_kl, clipfrac], feed_dict=inputs)
         logger.store(LossPi=pi_l_old, LossV=v_l_old,
                      KL=kl, Entropy=ent, ClipFrac=cf,
@@ -269,36 +280,63 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
 
     for epoch in range(epochs):
-        old_a = np.array([0]).reshape(-1)
-        old_r = np.array([0]).reshape((-1,1))
-        for t in range(local_steps_per_epoch):
-            a, v_t, logp_t, pi_state_t, v_state_t = sess.run(get_action_ops, feed_dict={x_ph: o.reshape(1,-1),
-                                                                                        a_ph: old_a,
-                                                                                        rew_ph: old_r,
-                                                                                        pi_state_ph:pi_state_t,
-                                                                                        v_state_ph: v_state_t})
+        for trial in range(trials_per_epoch):
+            print(f'trial: {trial}')
+            old_a = np.array([0]).reshape(1, 1)
+            old_r = np.array([0]).reshape((1, 1,1))
+            means = env.sample_tasks(1)[0]
+            action_dict = defaultdict(int)
+            for i in range(env.action_space.n):
+                action_dict[i] = 0
 
-            # save and log
-            buf.store(o, a, r, v_t, logp_t)
-            logger.store(VVals=v_t)
+            env.reset_task(means)
+            task_avg = 0.0
 
-            o, r, d, _ = env.step(a[0])
-            old_a = a
-            old_r = np.array([r]).reshape(-1,1)
-            ep_ret += r
-            ep_len += 1
+            for step in range(steps_per_trial):
+                a, v_t, logp_t, pi_state_t, v_state_t = sess.run(get_action_ops,
+                                                                 feed_dict={x_ph: o.reshape(1, 1,-1),
+                                                                                            a_ph: old_a,
+                                                                                            rew_ph: old_r,
+                                                                                            pi_state_ph:pi_state_t,
+                                                                                            v_state_ph: v_state_t})
+                # save and log
+                buf.store(o, a, r, v_t, logp_t)
+                logger.store(VVals=v_t)
 
-            terminal = d or (ep_len == max_ep_len)
-            if terminal or (t==local_steps_per_epoch-1):
-                if not(terminal):
-                    print('Warning: trajectory cut off by epoch at %d steps.'%ep_len)
-                # if trajectory didn't reach terminal state, bootstrap value target
-                last_val = r if d else sess.run(v, feed_dict={x_ph: o.reshape(1,-1)})
-                buf.finish_path(last_val)
-                if terminal:
-                    # only save EpRet / EpLen if trajectory finished
-                    logger.store(EpRet=ep_ret, EpLen=ep_len)
-                o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+                o, r, d, _ = env.step(a[0][0])
+                action_dict[a[0][0]] += 1
+
+                old_a = np.array(a).reshape(1,1)
+                old_r = np.array([r]).reshape(1,1,1)
+                ep_ret += r
+                task_avg += r
+                ep_len += 1
+
+                terminal = d or (ep_len == max_ep_len)
+                if terminal or (step==local_steps_per_epoch-1):
+                    if not(terminal):
+                        print('Warning: trajectory cut off by epoch at %d steps.'%ep_len)
+                    # if trajectory didn't reach terminal state, bootstrap value target
+                    last_val = r if d else sess.run(v, feed_dict={x_ph: o.reshape(1,-1)})
+                    buf.finish_path(last_val)
+                    if terminal:
+                        # only save EpRet / EpLen if trajectory finished
+                        logger.store(EpRet=ep_ret, EpLen=ep_len)
+
+
+
+                    o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+
+            # logger.log_tabular('Epoch', epoch)
+            # logger.log_tabular('EpRet', with_min_and_max=True)
+            # logger.log_tabular('Means', means)
+            # logger.dump_tabular()
+            print(f'avg in trial {trial}: {task_avg / steps_per_trial}')
+            print(f'Means in trial {trial}: {means}')
+
+            print(action_dict)
+
+
 
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs-1):
@@ -306,13 +344,11 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         # Perform PPO update!
 
         update()
-
-        # Log info about epoch
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', with_min_and_max=True)
         logger.log_tabular('EpLen', average_only=True)
         logger.log_tabular('VVals', with_min_and_max=True)
-        logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
+        logger.log_tabular('TotalEnvInteracts', (epoch + 1) * steps_per_epoch)
         logger.log_tabular('LossPi', average_only=True)
         logger.log_tabular('LossV', average_only=True)
         logger.log_tabular('DeltaLossPi', average_only=True)
@@ -321,38 +357,54 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('KL', average_only=True)
         logger.log_tabular('ClipFrac', average_only=True)
         logger.log_tabular('StopIter', average_only=True)
-        logger.log_tabular('Time', time.time()-start_time)
+        logger.log_tabular('Time', time.time() - start_time)
         logger.dump_tabular()
+        # Log info about epoch
+        # logger.log_tabular('Epoch', epoch)
+        # logger.log_tabular('EpRet', with_min_and_max=True)
+        # logger.log_tabular('EpLen', average_only=True)
+        # logger.log_tabular('VVals', with_min_and_max=True)
+        # logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
+        # logger.log_tabular('LossPi', average_only=True)
+        # logger.log_tabular('LossV', average_only=True)
+        # logger.log_tabular('DeltaLossPi', average_only=True)
+        # logger.log_tabular('DeltaLossV', average_only=True)
+        # logger.log_tabular('Entropy', average_only=True)
+        # logger.log_tabular('KL', average_only=True)
+        # logger.log_tabular('ClipFrac', average_only=True)
+        # logger.log_tabular('StopIter', average_only=True)
+        # logger.log_tabular('Time', time.time()-start_time)
+        # logger.dump_tabular()
 
 if __name__ == '__main__':
     tf.reset_default_graph()
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--env', type=str, default='HalfCheetah-v2')
-    parser.add_argument('--hid', type=int, default=64)
-    parser.add_argument('--l', type=int, default=2)
-    parser.add_argument('--gamma', type=float, default=0.99)
-    parser.add_argument('--seed', '-s', type=int, default=0)
-    parser.add_argument('--cpu', type=int, default=4)
-    parser.add_argument('--steps', type=int, default=100)
-    parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--exp_name', type=str, default='ppo')
-    args = parser.parse_args()
-
-#    mpi_fork(args.cpu)  # run parallel code with mpi
-
+    exp_name = 'ppo'
+    num_arms = 5
+    env = BernoulliBanditEnv
+    env_fn = env(num_arms)
+    actor_critic = core.gru_actor_critic
+    ac_kwargs = dict()
+    seed = 0
+    gru_units = 256
+    # steps_per_epoch = 250000
+    epochs = 2500
+    trials_per_epoch = 10
+    steps_per_trial = 100
+    gamma = 0.99
+    clip_ratio = 0.2
+    pi_lr = 3e-4
+    vf_lr = 1e-3
+    train_pi_iters = 1000
+    train_v_iters = 1000
+    lam = 0.3
+    max_ep_len = 1000
+    target_kl = 0.01
+    logger_kwargs = dict()
+    save_freq = 10
     from run_utils import setup_logger_kwargs
-    logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
-#    ppo(lambda : gym.make(args.env), actor_critic=core.mlp_actor_critic,
-#        ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
-#        seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
-#        logger_kwargs=logger_kwargs)
-#     ppo(lambda : BernoulliBanditEnv(2), actor_critic=core.mlp_actor_critic,
-#         ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma,
-#         seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
-#         logger_kwargs=logger_kwargs)
 
-    ppo(lambda: BernoulliBanditEnv(2), actor_critic=core.gru_actor_critic,
-        ac_kwargs={}, gamma=args.gamma,
-        seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
-        logger_kwargs=logger_kwargs)
+    logger_kwargs = setup_logger_kwargs(exp_name, seed)
+    ppo(lambda: env_fn, actor_critic, ac_kwargs, seed,
+        trials_per_epoch, steps_per_trial, epochs, gamma, clip_ratio, pi_lr,
+        vf_lr, train_pi_iters, train_v_iters, lam, max_ep_len,
+        target_kl, logger_kwargs, save_freq)

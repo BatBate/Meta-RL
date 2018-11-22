@@ -32,14 +32,14 @@ def mlp(x, hidden_sizes=(32,), activation=tf.tanh, output_activation=None):
     return tf.layers.dense(x, units=hidden_sizes[-1], activation=output_activation)
 
 def gru(x, a, r, rnn_state, num_gru_units, num_out, activation=None, kernel_initializer=None, output_activation=None):
-    rnn_in = tf.concat([x,a,r], 1)
-    rnn_in = tf.expand_dims(rnn_in, 0)
-    sequence_length = tf.shape(x)[:1]
+    rnn_in = tf.concat([x,a,r], 2)
+    # rnn_in = tf.expand_dims(rnn_in, 0)
+    # sequence_length = tf.shape(x)[1:2]
     gru_layer = tf.nn.rnn_cell.GRUCell(num_gru_units, activation=activation, kernel_initializer=tf.initializers.orthogonal(),
                                        bias_initializer=tf.initializers.zeros())
-    gru_output, gru_state = tf.nn.dynamic_rnn(gru_layer, rnn_in, initial_state=rnn_state, sequence_length = sequence_length, time_major=False)
+    gru_output, gru_state = tf.nn.dynamic_rnn(gru_layer, rnn_in, initial_state=rnn_state, sequence_length = None, time_major=False)
     gru_state = gru_state[:1, :]
-    gru_output = tf.reshape(gru_output, [-1, num_gru_units])
+    # gru_output = tf.reshape(gru_output, [-1, num_gru_units])
     return tf.layers.dense(gru_output, units=num_out, bias_initializer=tf.zeros_initializer(),
                            kernel_initializer= tf.initializers.glorot_normal(), activation=output_activation),gru_state
 
@@ -101,9 +101,10 @@ def gru_categorical_policy(x, a, r, rnn_state, num_gru_units, activation, action
     # logits, gru_state = gru(x, a, r, rnn_state, num_gru_units, act_dim, activation=activation, kernel_initializer=tf.initializers.orthogonal, output_activation=output_activation)
     logits, gru_state = gru(x, a, r, rnn_state, num_gru_units, act_dim, activation)
     logp_all = tf.nn.log_softmax(logits)
-    pi = tf.squeeze(tf.multinomial(logits,1, output_dtype=tf.int32), axis=1)
-    logp = tf.reduce_sum(a * logp_all, axis=1)
-    logp_pi = tf.reduce_sum(tf.one_hot(pi, depth=act_dim) * logp_all, axis=1)
+    pi = tf.squeeze(tf.multinomial(tf.reshape(logits, [-1, act_dim]),1, output_dtype=tf.int32), axis=1)
+    pi = tf.reshape(pi, tf.shape(logits)[:2])
+    logp = tf.reduce_sum(a * logp_all, axis=2)
+    logp_pi = tf.reduce_sum(tf.one_hot(pi, depth=act_dim) * logp_all, axis=2)
     return pi, logp, logp_pi, gru_state
 
 def gru_gaussian_policy(x, a, r, num_gru_units, activation, output_activation, action_space):
@@ -153,7 +154,7 @@ def gru_actor_critic(x, a, r, pi_state, v_state, num_gru_units=256, activation=t
         pi, logp, logp_pi, new_pi_state = policy(x, a, r, pi_state, num_gru_units, activation, action_space)
     with tf.variable_scope('v'):
         v, new_v_state = gru(x, a, r, v_state, num_gru_units,1, activation)
-        v = tf.squeeze(v, axis=1)
+        v = tf.squeeze(v, axis=2)
         #v = tf.squeeze(mlp(x, [256]+[1], activation, None), axis=1)
 
         # v = tf.squeeze(gru(x, a, r, num_gru_units, 1, activation, tf.initializers.orthogonal, output_activation=None), axis=1)
