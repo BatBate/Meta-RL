@@ -103,13 +103,15 @@ def mlp_actor_critic(x, a, hidden_sizes=(64,64), activation=tf.tanh,
         v = tf.squeeze(mlp(x, list(hidden_sizes)+[1], activation, None), axis=1)
     return pi, logp, logp_pi, v
 
-def gru(x, a, rew, rnn_state, n_hidden, activation, output_size):
+def gru(x, a, rew, rnn_state, n_hidden, n, activation, output_size):
     hidden = tf.concat([x, a, rew], 1)
+    print(hidden.shape)
     # use layer normalization for gru
     gru_cell = GRU(n_hidden, activation=activation)
 #    gru_cell = tf.nn.rnn_cell.GRUCell(n_hidden, activation=activation, kernel_initializer=tf.initializers.orthogonal(), bias_initializer=tf.initializers.zeros())
     rnn_in = tf.expand_dims(hidden, [0])
-    step_size = tf.shape(rew)[:1]
+#    print(tf.reshape(rnn_in, [None, n, hidden.shape[-1]]).shape)
+    step_size = tf.minimum(tf.shape(rew)[:1], n)
     gru_outputs, gru_state = tf.nn.dynamic_rnn(
         gru_cell, rnn_in, initial_state=rnn_state, sequence_length=step_size,
         time_major=False)
@@ -120,16 +122,16 @@ def gru(x, a, rew, rnn_state, n_hidden, activation, output_size):
     norm_out = tf.contrib.layers.layer_norm(out)
     return norm_out, state_out
     
-def gru_categorical_policy(x, a, rew, rnn_state, n_hidden, activation, output_size, action_space):
+def gru_categorical_policy(x, a, rew, rnn_state, n_hidden, n, activation, output_size, action_space):
     act_dim = action_space.n
-    logits, state_out = gru(x, a, rew, rnn_state, n_hidden, activation, output_size)
+    logits, state_out = gru(x, a, rew, rnn_state, n_hidden, n, activation, output_size)
     logp_all = tf.nn.log_softmax(logits)
     pi = tf.squeeze(tf.multinomial(logits,1), axis=1)
     logp = tf.reduce_sum(a * logp_all, axis=1)
     logp_pi = tf.reduce_sum(tf.one_hot(pi, depth=act_dim) * logp_all, axis=1)
     return pi, logp, logp_pi, state_out
 
-def gru_actor_critic(x, a, rew, pi_rnn_state, v_rnn_state, n_hidden, activation=tf.nn.relu, 
+def gru_actor_critic(x, a, rew, pi_rnn_state, v_rnn_state, n_hidden, n, activation=tf.nn.relu, 
                      output_activation=None, policy=None, action_space=None):
     # only consider discrete experiment now
     if policy is None and isinstance(action_space, Discrete):
@@ -138,8 +140,8 @@ def gru_actor_critic(x, a, rew, pi_rnn_state, v_rnn_state, n_hidden, activation=
     a = tf.one_hot(a, depth=act_dim)
 
     with tf.variable_scope('pi'):
-        pi, logp, logp_pi, new_pi_rnn_state = policy(x, a, rew, pi_rnn_state, n_hidden, activation, act_dim, action_space)
+        pi, logp, logp_pi, new_pi_rnn_state = policy(x, a, rew, pi_rnn_state, n_hidden, n, activation, act_dim, action_space)
     with tf.variable_scope('v'):
-        v, new_v_rnn_state = gru(x, a, rew, v_rnn_state, n_hidden, activation, 1)
+        v, new_v_rnn_state = gru(x, a, rew, v_rnn_state, n_hidden, n, activation, 1)
         v = tf.squeeze(v, axis=1)
     return pi, logp, logp_pi, v, new_pi_rnn_state, new_v_rnn_state

@@ -7,6 +7,7 @@ from logx import EpochLogger
 from mpi_tf import MpiAdamOptimizer, sync_all_params
 from mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
 from bandit import BernoulliBanditEnv, GaussianBanditEnv
+from collections import defaultdict
 
 
 class PPOBuffer:
@@ -91,7 +92,7 @@ with early stopping based on approximate KL
 
 """
 def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, 
-        steps_per_epoch=100, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
+        batch_size=25000, n = 100, epochs=100, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
         vf_lr=1e-3, train_pi_iters=1000, train_v_iters=80, lam=0.97, max_ep_len=1000,
         target_kl=0.01, logger_kwargs=dict(), save_freq=10):
     """
@@ -169,7 +170,6 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     logger = EpochLogger(**logger_kwargs)
     logger.save_config(locals())
 
-    seed += 10000 * proc_id()
     tf.set_random_seed(seed)
     np.random.seed(seed)
 
@@ -186,7 +186,9 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     pi_rnn_state_ph = tf.placeholder(tf.float32, [1, 256])
     v_rnn_state_ph = tf.placeholder(tf.float32, [1, 256])
     # Main outputs from computation graph
-    pi, logp, logp_pi, v, pi_rnn_state, v_rnn_state = actor_critic(x_ph, a_ph, rew_ph, pi_rnn_state_ph, v_rnn_state_ph, 256, action_space=env.action_space)
+    pi, logp, logp_pi, v, pi_rnn_state, v_rnn_state = actor_critic(
+            x_ph, a_ph, rew_ph, pi_rnn_state_ph, v_rnn_state_ph, 256, 
+            n, action_space=env.action_space)
 
     # Need all placeholders in *this* order later (to zip with data from buffer)
     all_phs = [x_ph, a_ph, adv_ph, ret_ph, logp_old_ph, rew_ph]
@@ -197,8 +199,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     get_action_ops = [pi, v, logp_pi, pi_rnn_state, v_rnn_state]
 
     # Experience buffer
-    local_steps_per_epoch = int(steps_per_epoch / num_procs())
-    buf = PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
+    trials = batch_size // n
+    buf = PPOBuffer(obs_dim, act_dim, batch_size, gamma, lam)
 
     # Count variables
     var_counts = tuple(core.count_vars(scope) for scope in ['pi', 'v'])
@@ -258,40 +260,42 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
-        last_a = np.array(0)
-        last_r = np.array(r)
-        last_pi_rnn_state = np.zeros((1, 256), np.float32)
-        last_v_rnn_state = np.zeros((1, 256), np.float32)
-        means = env.sample_tasks(1)[0]
-#        print('task means:', means)
-        env.reset_task(means)
-        for t in range(local_steps_per_epoch):
-            a, v_t, logp_t, pi_rnn_state_t, v_rnn_state_t = sess.run(get_action_ops, feed_dict={x_ph: o.reshape(1,-1), a_ph: last_a.reshape(-1,), rew_ph: last_r.reshape(-1,1), pi_rnn_state_ph: last_pi_rnn_state, v_rnn_state_ph: last_v_rnn_state})
-#            print('action:', a)
-            # save and log
-            buf.store(o, a, r, v_t, logp_t)
-            logger.store(VVals=v_t)
-
-            o, r, d, _ = env.step(a[0])
-            ep_ret += r
-            ep_len += 1
-
-            terminal = d or (ep_len == max_ep_len)
-            if terminal or (t==local_steps_per_epoch-1):
-                if not(terminal):
-                    print('Warning: trajectory cut off by epoch at %d steps.'%ep_len)
-                # if trajectory didn't reach terminal state, bootstrap value target
-                last_val = r if d else sess.run(v, feed_dict={x_ph: o.reshape(1,-1)})
-                buf.finish_path(last_val)
-                if terminal:
-                    # only save EpRet / EpLen if trajectory finished
-                    logger.store(EpRet=ep_ret, EpLen=ep_len)
-                o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
-            last_a = a[0]
+        for trail in range(trials):
+            last_a = np.array(0)
             last_r = np.array(r)
-            last_pi_rnn_state = pi_rnn_state_t
-            last_v_rnn_state = v_rnn_state_t
-
+            last_pi_rnn_state = np.zeros((1, 256), np.float32)
+            last_v_rnn_state = np.zeros((1, 256), np.float32)
+            means = env.sample_tasks(1)[0]
+            print('task means:', means)
+            action_dict = defaultdict(int)
+            env.reset_task(means)
+            for episode in range(n):
+                a, v_t, logp_t, pi_rnn_state_t, v_rnn_state_t = sess.run(get_action_ops, feed_dict={x_ph: o.reshape(1,-1), a_ph: last_a.reshape(-1,), rew_ph: last_r.reshape(-1,1), pi_rnn_state_ph: last_pi_rnn_state, v_rnn_state_ph: last_v_rnn_state})
+    #            print('action:', a)
+                action_dict[a[0]] += 1
+                # save and log
+                buf.store(o, a, r, v_t, logp_t)
+                logger.store(VVals=v_t)
+                o, r, d, _ = env.step(a[0])
+                ep_ret += r
+                ep_len += 1
+    
+                terminal = d or (ep_len == max_ep_len)
+                if terminal or (t==n-1):
+                    if not(terminal):
+                        print('Warning: trajectory cut off by epoch at %d steps.'%ep_len)
+                    # if trajectory didn't reach terminal state, bootstrap value target
+                    last_val = r if d else sess.run(v, feed_dict={x_ph: o.reshape(1,-1)})
+                    buf.finish_path(last_val)
+                    if terminal:
+                        # only save EpRet / EpLen if trajectory finished
+                        logger.store(EpRet=ep_ret, EpLen=ep_len)
+                    o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+                last_a = a[0]
+                last_r = np.array(r)
+                last_pi_rnn_state = pi_rnn_state_t
+                last_v_rnn_state = v_rnn_state_t
+            print(action_dict)
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs-1):
             logger.save_state({'env': env}, None)
@@ -303,7 +307,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('EpRet', with_min_and_max=True)
         logger.log_tabular('EpLen', average_only=True)
         logger.log_tabular('VVals', with_min_and_max=True)
-        logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
+        logger.log_tabular('TotalEnvInteracts', (epoch+1)*batch_size)
         logger.log_tabular('LossPi', average_only=True)
         logger.log_tabular('LossV', average_only=True)
         logger.log_tabular('DeltaLossPi', average_only=True)
@@ -325,8 +329,9 @@ if __name__ == '__main__':
     ac_kwargs=dict()
     seed = 0
     gru_units = 256
-    steps_per_epoch = 100
-    epochs=2500
+    batch_size = 100
+    n = 10
+    epochs=300
     gamma=0.99
     clip_ratio=0.2
     pi_lr=3e-4
@@ -341,6 +346,6 @@ if __name__ == '__main__':
     from run_utils import setup_logger_kwargs
     logger_kwargs = setup_logger_kwargs(exp_name, seed)
     ppo(lambda: env_fn, actor_critic, ac_kwargs, seed, 
-        steps_per_epoch, epochs, gamma, clip_ratio, pi_lr,
+        batch_size, n, epochs, gamma, clip_ratio, pi_lr,
         vf_lr, train_pi_iters, train_v_iters, lam, max_ep_len,
         target_kl, logger_kwargs, save_freq)
