@@ -62,23 +62,28 @@ class PolicyGRUNet:
 
         ob_space = env.observation_space
         act_space = env.action_space
+        # policy_state = tf.placeholder(tf.float32, [1, 256], name='pi_state')
+        # value_state = tf.placeholder(tf.float32, [1, 256],name='v_state')
 
         with tf.variable_scope(name):
-            self.obs = tf.placeholder(dtype=tf.float32, shape=[None] + list(ob_space.shape), name='obs')
+            self.obs = tf.placeholder(dtype=tf.float32, shape=[None, ob_space.n], name='obs')
+            rnn_in = tf.expand_dims(self.obs, [0])
 
             with tf.variable_scope('policy_net'):
                 gru_cell = nn.rnn_cell.GRUCell(256, activation=nn.relu, kernel_initializer=tf.initializers.orthogonal(), bias_initializer=tf.zeros_initializer())
-                outputs, states = nn.dynamic_rnn(gru_cell,self.obs)
-                self.act_probs = tf.layers.dense(outputs, units=act_space.n, activation=tf.nn.softmax, kernel_initializer=tf.initializers.glorot_normal(), bias_initializer=tf.zeros_initializer())
+                outputs, states = nn.dynamic_rnn(gru_cell, inputs=rnn_in, dtype=tf.float32)
+                outputs = tf.reshape(outputs, [-1, 256])
+                self.act_probs = tf.layers.dense(outputs, activation=None, units=act_space.n, kernel_initializer=tf.glorot_normal_initializer(), bias_initializer=tf.zeros_initializer(),)
                 self.policy_states = states
 
             with tf.variable_scope('value_net'):
                 gru_cell = nn.rnn_cell.GRUCell(256, activation=nn.relu, kernel_initializer=tf.initializers.orthogonal(), bias_initializer=tf.zeros_initializer())
-                outputs, states = nn.dynamic_rnn(gru_cell,self.obs)
-                self.act_probs = tf.layers.dense(outputs, units=1, activation=None, kernel_initializer=tf.initializers.glorot_normal(), bias_initializer=tf.zeros_initializer())
-                self.policy_states = states
+                outputs, states = nn.dynamic_rnn(gru_cell, inputs=rnn_in, dtype=tf.float32)
+                outputs = tf.reshape(outputs, [-1, 256])
+                self.v_preds = tf.layers.dense(outputs, units=1, activation=None, kernel_initializer=tf.glorot_normal_initializer(), bias_initializer=tf.zeros_initializer())
+                self.value_states = states
 
-            self.act_stochastic = tf.multinomial(tf.log(self.act_probs), num_samples=1)
+            self.act_stochastic = tf.multinomial(self.act_probs, num_samples=1)
             self.act_stochastic = tf.reshape(self.act_stochastic, shape=[-1])
 
             self.act_deterministic = tf.argmax(self.act_probs, axis=1)
@@ -99,4 +104,3 @@ class PolicyGRUNet:
 
     def get_trainable_variables(self):
         return tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.scope)
-
