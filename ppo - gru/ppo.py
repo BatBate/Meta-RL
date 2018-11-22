@@ -91,7 +91,7 @@ Proximal Policy Optimization (by clipping),
 with early stopping based on approximate KL
 
 """
-def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, 
+def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gru_units=256,
         batch_size=25000, n = 100, epochs=100, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
         vf_lr=1e-3, train_pi_iters=1000, train_v_iters=80, lam=0.97, max_ep_len=1000,
         target_kl=0.01, logger_kwargs=dict(), save_freq=10):
@@ -183,11 +183,11 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     # Inputs to computation graph
     x_ph, a_ph = core.placeholders_from_spaces(env.observation_space, env.action_space)
     rew_ph, adv_ph, ret_ph, logp_old_ph = core.placeholders(1, None, None, None)
-    pi_rnn_state_ph = tf.placeholder(tf.float32, [1, 256])
-    v_rnn_state_ph = tf.placeholder(tf.float32, [1, 256])
+    pi_rnn_state_ph = tf.placeholder(tf.float32, [1, gru_units])
+    v_rnn_state_ph = tf.placeholder(tf.float32, [1, gru_units])
     # Main outputs from computation graph
     pi, logp, logp_pi, v, pi_rnn_state, v_rnn_state = actor_critic(
-            x_ph, a_ph, rew_ph, pi_rnn_state_ph, v_rnn_state_ph, 256, 
+            x_ph, a_ph, rew_ph, pi_rnn_state_ph, v_rnn_state_ph, gru_units, 
             n, action_space=env.action_space)
 
     # Need all placeholders in *this* order later (to zip with data from buffer)
@@ -233,8 +233,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     def update():
         inputs = {k:v for k,v in zip(all_phs, buf.get())}
-        inputs[pi_rnn_state_ph] = np.zeros((1, 256), np.float32)
-        inputs[v_rnn_state_ph] = np.zeros((1, 256), np.float32)
+        inputs[pi_rnn_state_ph] = np.zeros((1, gru_units), np.float32)
+        inputs[v_rnn_state_ph] = np.zeros((1, gru_units), np.float32)
         pi_l_old, v_l_old, ent = sess.run([pi_loss, v_loss, approx_ent], feed_dict=inputs)
         
         # Training
@@ -249,7 +249,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             sess.run(train_v, feed_dict=inputs)
 
         # Log changes from update
-        pi_l_new, v_l_new, kl, cf = sess.run([pi_loss, v_loss, approx_kl, clipfrac], feed_dict=inputs)
+        pi_l_new, v_l_new, kl, cf = sess.run(
+                [pi_loss, v_loss, approx_kl, clipfrac], feed_dict=inputs)
         logger.store(LossPi=pi_l_old, LossV=v_l_old, 
                      KL=kl, Entropy=ent, ClipFrac=cf,
                      DeltaLossPi=(pi_l_new - pi_l_old),
@@ -261,17 +262,23 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         for trail in range(trials):
+            print(trail)
             last_a = np.array(0)
             last_r = np.array(r)
-            last_pi_rnn_state = np.zeros((1, 256), np.float32)
-            last_v_rnn_state = np.zeros((1, 256), np.float32)
+            last_pi_rnn_state = np.zeros((1, gru_units), np.float32)
+            last_v_rnn_state = np.zeros((1, gru_units), np.float32)
             means = env.sample_tasks(1)[0]
             print('task means:', means)
             action_dict = defaultdict(int)
             env.reset_task(means)
             for episode in range(n):
-                a, v_t, logp_t, pi_rnn_state_t, v_rnn_state_t = sess.run(get_action_ops, feed_dict={x_ph: o.reshape(1,-1), a_ph: last_a.reshape(-1,), rew_ph: last_r.reshape(-1,1), pi_rnn_state_ph: last_pi_rnn_state, v_rnn_state_ph: last_v_rnn_state})
-    #            print('action:', a)
+                a, v_t, logp_t, pi_rnn_state_t, v_rnn_state_t = sess.run(
+                        get_action_ops, feed_dict={
+                                x_ph: o.reshape(1,-1), 
+                                a_ph: last_a.reshape(-1,), 
+                                rew_ph: last_r.reshape(-1,1), 
+                                pi_rnn_state_ph: last_pi_rnn_state, 
+                                v_rnn_state_ph: last_v_rnn_state})
                 action_dict[a[0]] += 1
                 # save and log
                 buf.store(o, a, r, v_t, logp_t)
@@ -279,6 +286,11 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                 o, r, d, _ = env.step(a[0])
                 ep_ret += r
                 ep_len += 1
+                
+                last_a = a[0]
+                last_r = np.array(r)
+                last_pi_rnn_state = pi_rnn_state_t
+                last_v_rnn_state = v_rnn_state_t
     
                 terminal = d or (ep_len == max_ep_len)
                 if terminal or (t==n-1):
@@ -291,10 +303,6 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                         # only save EpRet / EpLen if trajectory finished
                         logger.store(EpRet=ep_ret, EpLen=ep_len)
                     o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
-                last_a = a[0]
-                last_r = np.array(r)
-                last_pi_rnn_state = pi_rnn_state_t
-                last_v_rnn_state = v_rnn_state_t
             print(action_dict)
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs-1):
@@ -329,9 +337,9 @@ if __name__ == '__main__':
     ac_kwargs=dict()
     seed = 0
     gru_units = 256
-    batch_size = 100
-    n = 10
-    epochs=300
+    batch_size = 250000
+    n = 100
+    epochs=100
     gamma=0.99
     clip_ratio=0.2
     pi_lr=3e-4
@@ -345,7 +353,7 @@ if __name__ == '__main__':
     save_freq=10
     from run_utils import setup_logger_kwargs
     logger_kwargs = setup_logger_kwargs(exp_name, seed)
-    ppo(lambda: env_fn, actor_critic, ac_kwargs, seed, 
+    ppo(lambda: env_fn, actor_critic, ac_kwargs, seed, gru_units,
         batch_size, n, epochs, gamma, clip_ratio, pi_lr,
         vf_lr, train_pi_iters, train_v_iters, lam, max_ep_len,
         target_kl, logger_kwargs, save_freq)
