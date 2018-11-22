@@ -4,7 +4,7 @@ import numpy as np
 import tensorflow as tf
 from policy_net import PolicyGRUNet, Policy_net
 from ppo import PPOTrain
-import gym_bandits
+from bandit import BernoulliBanditEnv
 
 ITERATION = int(1e5)
 GAMMA = 0.95
@@ -12,7 +12,7 @@ GAMMA = 0.95
 
 def main():
     # env = gym.make('CartPole-v0')
-    env = gym.make("BanditTenArmedGaussian-v0")
+    env = BernoulliBanditEnv(5)
     env.seed(0)
     ob_space = env.observation_space
     # Policy = Policy_net('policy', env)
@@ -38,7 +38,7 @@ def main():
             while True:  # run policy RUN_POLICY_STEPS which is much less than episode length
                 run_policy_steps += 1
                 obs = np.stack([obs]).astype(dtype=np.float32)  # prepare to feed placeholder Policy.obs
-                obs = np.expand_dims(obs, axis=0)
+                # obs = np.expand_dims(obs, axis=0)
                 act, v_pred = Policy.act(obs=obs, stochastic=False)
 
                 act = np.asscalar(act)
@@ -77,7 +77,7 @@ def main():
 
             # convert list to numpy array for feeding tf.placeholder
             observations = np.reshape(observations, newshape=[-1] + list(ob_space.shape))
-            observations = np.expand_dims(observations, axis=0)
+            # observations = np.expand_dims(observations, axis=0)
             actions = np.array(actions).astype(dtype=np.int32)
             rewards = np.array(rewards).astype(dtype=np.float32)
             v_preds_next = np.array(v_preds_next).astype(dtype=np.float32)

@@ -66,7 +66,7 @@ class PolicyGRUNet:
         # value_state = tf.placeholder(tf.float32, [1, 256],name='v_state')
 
         with tf.variable_scope(name):
-            self.obs = tf.placeholder(dtype=tf.float32, shape=[None, ob_space.n], name='obs')
+            self.obs = tf.placeholder(dtype=tf.float32, shape=[None] + list(ob_space.shape), name='obs')
             rnn_in = tf.expand_dims(self.obs, [0])
 
             with tf.variable_scope('policy_net'):
