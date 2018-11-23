@@ -83,7 +83,7 @@ class PolicyGRUNet:
                 self.v_preds = tf.layers.dense(outputs, units=1, activation=None, kernel_initializer=tf.glorot_normal_initializer(), bias_initializer=tf.zeros_initializer())
                 self.value_states = states
 
-            self.act_stochastic = tf.multinomial(self.act_probs, num_samples=1)
+            self.act_stochastic = tf.multinomial(tf.nn.log_softmax(self.act_probs), num_samples=1)
             self.act_stochastic = tf.reshape(self.act_stochastic, shape=[-1])
 
             self.act_deterministic = tf.argmax(self.act_probs, axis=1)

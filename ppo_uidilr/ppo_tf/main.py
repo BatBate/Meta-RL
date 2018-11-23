@@ -12,7 +12,8 @@ GAMMA = 0.95
 
 def main():
     # env = gym.make('CartPole-v0')
-    env = BernoulliBanditEnv(5)
+    num_arm = 5
+    env = BernoulliBanditEnv(num_arm)
     env.seed(0)
     ob_space = env.observation_space
     # Policy = Policy_net('policy', env)
@@ -39,7 +40,7 @@ def main():
                 run_policy_steps += 1
                 obs = np.stack([obs]).astype(dtype=np.float32)  # prepare to feed placeholder Policy.obs
                 # obs = np.expand_dims(obs, axis=0)
-                act, v_pred = Policy.act(obs=obs, stochastic=False)
+                act, v_pred = Policy.act(obs=obs, stochastic=True)
 
                 act = np.asscalar(act)
                 v_pred = np.asscalar(v_pred)
@@ -48,6 +49,8 @@ def main():
                 actions.append(act)
                 v_preds.append(v_pred)
                 rewards.append(reward)
+                if act not in range(num_arm):
+                    act = np.random.randint(num_arm)
 
                 next_obs, reward, done, info = env.step(act)
 
