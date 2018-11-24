@@ -401,7 +401,7 @@ if __name__ == '__main__':
     gru_units = 256
     # steps_per_epoch = 250000
     epochs = 100
-    trials_per_epoch = 25000
+    trials_per_epoch = 2500
     steps_per_trial = 10
     gamma = 0.99
     clip_ratio = 0.2
