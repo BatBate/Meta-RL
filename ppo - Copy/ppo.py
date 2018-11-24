@@ -4,6 +4,7 @@ import gym
 import time
 import core
 from logx import EpochLogger
+from logx import restore_tf_graph
 from mpi_tf import MpiAdamOptimizer, sync_all_params
 from mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
 from bandit import BernoulliBanditEnv, GaussianBanditEnv
@@ -243,6 +244,11 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     # Setup model saving
     logger.setup_tf_saver(sess, inputs={'x': x_ph}, outputs={'pi': pi, 'v': v})
 
+    # tf.reset_default_graph()
+    # restore_tf_graph(sess, '..//data//ppo//ppo_s0//simple_save')
+
+
+
     def update():
         inputs = {k:v for k,v in zip(all_phs, buf.get())}
         inputs[pi_state_ph] = np.zeros((trials_per_epoch, NUM_GRU_UNITS))
@@ -288,7 +294,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             for i in range(env.action_space.n):
                 action_dict[i] = 0
 
-            env.reset_task(means)
+            env.reset_task_simple(means)
             task_avg = 0.0
             pi_state_t = np.zeros((1, NUM_GRU_UNITS))
             v_state_t = np.zeros((1, NUM_GRU_UNITS))
@@ -308,6 +314,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                 except:
                     print(a)
                     raise AssertionError
+
                 action_dict[a[0][0]] += 1
 
                 old_a = np.array(a).reshape(1,1)
@@ -345,6 +352,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs-1):
             logger.save_state({'env': env}, None)
+            # saved_path = saver.save(sess, f"/tmp/model_epoch{epoch}.ckpt")
+            # print(f'Model saved in {saved_path}')
         # Perform PPO update!
 
         update()
@@ -391,9 +400,9 @@ if __name__ == '__main__':
     seed = 0
     gru_units = 256
     # steps_per_epoch = 250000
-    epochs = 2500
-    trials_per_epoch = 10
-    steps_per_trial = 100
+    epochs = 100
+    trials_per_epoch = 25000
+    steps_per_trial = 10
     gamma = 0.99
     clip_ratio = 0.2
     pi_lr = 3e-4

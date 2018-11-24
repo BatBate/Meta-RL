@@ -2,6 +2,7 @@ import numpy as np
 import tensorflow as tf
 import scipy.signal
 from gym.spaces import Box, Discrete
+from gru import GRU
 
 EPS = 1e-8
 
@@ -35,8 +36,7 @@ def gru(x, a, r, rnn_state, num_gru_units, num_out, activation=None, kernel_init
     rnn_in = tf.concat([x,a,r], 2)
     # rnn_in = tf.expand_dims(rnn_in, 0)
     # sequence_length = tf.shape(x)[1:2]
-    gru_layer = tf.nn.rnn_cell.GRUCell(num_gru_units, activation=activation, kernel_initializer=tf.initializers.orthogonal(),
-                                       bias_initializer=tf.initializers.zeros())
+    gru_layer = GRU(num_gru_units, activation=activation)
     gru_output, gru_state = tf.nn.dynamic_rnn(gru_layer, rnn_in, initial_state=rnn_state, sequence_length = None, time_major=False)
     gru_state = gru_state[:1, :]
     # gru_output = tf.reshape(gru_output, [-1, num_gru_units])
