@@ -8,6 +8,8 @@ from mpi_tf import MpiAdamOptimizer, sync_all_params
 from mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
 from bandit import BernoulliBanditEnv, GaussianBanditEnv
 from collections import defaultdict
+from vizdoombasic import VizdoomBasic
+import tensorflow.contrib.slim as slim
 
 
 class PPOBuffer:
@@ -39,6 +41,12 @@ class PPOBuffer:
         self.val_buf[self.ptr] = val
         self.logp_buf[self.ptr] = logp
         self.ptr += 1
+
+    def pad_zeros(self, num_zeros):
+        # Just increase the ptr. Everything is initialized to 0 in __init__
+        self.ptr += num_zeros
+        assert self.ptr <= self.max_size
+
 
     def finish_path(self, last_val=0):
         """
@@ -91,8 +99,9 @@ Proximal Policy Optimization (by clipping),
 with early stopping based on approximate KL
 
 """
+#TODO: Add sequence length ph
 def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gru_units=256,
-        batch_size=25000, n = 100, epochs=100, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
+        trials_per_epoch=100, episodes_per_trial=2, n = 100, epochs=100, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
         vf_lr=1e-3, train_pi_iters=1000, train_v_iters=80, lam=0.97, max_ep_len=1000,
         target_kl=0.01, logger_kwargs=dict(), save_freq=10):
     """
@@ -180,27 +189,40 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
     # Share information about action space with policy architecture
     ac_kwargs['action_space'] = env.action_space
 
-    # Inputs to computation graph
-    x_ph, a_ph = core.placeholders_from_spaces(env.observation_space, env.action_space)
+    # Inputs to computation graph\
+    raw_input_ph = tf.placeholder(dtype=tf.float32, shape=obs_dim, name='raw_input_ph')
+    rescale_image_op = tf.image.resize_images(raw_input_ph, [30, 40])
+    max_seq_len_ph = tf.placeholder(dtype=tf.int32, shape=(), name='max_seq_len_ph')
+    seq_len_ph = tf.placeholder(dtype=tf.int32, shape=(None,))
+
+    # rescaled_image_ph This is a ph  because we want to be able to pass in value to this node manually
+    rescaled_image_in_ph = tf.placeholder(dtype=tf.float32, shape=[None, 30, 40, 3], name='rescaled_image_in_ph')
+    a_ph = core.placeholders_from_spaces( env.action_space)[0]
+    conv1 = slim.conv2d(activation_fn=tf.nn.relu, inputs=rescaled_image_in_ph, num_outputs=16, kernel_size=[5,5],
+                        stride=2)
+    image_out = slim.flatten(slim.conv2d(activation_fn=tf.nn.relu, inputs=conv1, num_outputs=16, kernel_size=[5,5],
+                        stride=2))
+    # x_ph = slim.fully_connected(slim.flatten(conv2), 256, activation_fn=tf.nn.relu)
+
     rew_ph, adv_ph, ret_ph, logp_old_ph = core.placeholders(1, None, None, None)
-    pi_rnn_state_ph = tf.placeholder(tf.float32, [1, gru_units])
-    v_rnn_state_ph = tf.placeholder(tf.float32, [1, gru_units])
+    pi_rnn_state_ph = tf.placeholder(tf.float32, [None, gru_units], name='pi_rnn_state_ph')
+    v_rnn_state_ph = tf.placeholder(tf.float32, [None, gru_units], name='v_rnn_state_ph')
     # Main outputs from computation graph
-    pi, logp, logp_pi, v, pi_rnn_state, v_rnn_state = actor_critic(
-            x_ph, a_ph, rew_ph, pi_rnn_state_ph, v_rnn_state_ph, gru_units, 
-            n, action_space=env.action_space)
+    pi, logp, logp_pi, v, pi_rnn_state, v_rnn_state, logits = actor_critic(
+            image_out, a_ph, rew_ph, pi_rnn_state_ph, v_rnn_state_ph, gru_units,
+            max_seq_len_ph,seq_len=seq_len_ph, action_space=env.action_space)
 
     # Need all placeholders in *this* order later (to zip with data from buffer)
-    all_phs = [x_ph, a_ph, adv_ph, ret_ph, logp_old_ph, rew_ph]
+    all_phs = [rescaled_image_in_ph, a_ph, adv_ph, ret_ph, logp_old_ph, rew_ph]
 #    for ph in all_phs:
 #        print(ph.shape)
 
     # Every step, get: action, value, and logprob
-    get_action_ops = [pi, v, logp_pi, pi_rnn_state, v_rnn_state]
+    get_action_ops = [pi, v, logp_pi, pi_rnn_state, v_rnn_state, logits]
 
     # Experience buffer
-    trials = batch_size // n
-    buf = PPOBuffer(obs_dim, act_dim, batch_size, gamma, lam)
+    buffer_size = trials_per_epoch * episodes_per_trial * max_ep_len
+    buf = PPOBuffer(rescaled_image_in_ph.get_shape().as_list()[1:], act_dim, buffer_size, gamma, lam)
 
     # Count variables
     var_counts = tuple(core.count_vars(scope) for scope in ['pi', 'v'])
@@ -229,16 +251,21 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
     sess.run(sync_all_params())
 
     # Setup model saving
-    logger.setup_tf_saver(sess, inputs={'x': x_ph}, outputs={'pi': pi, 'v': v})
+    logger.setup_tf_saver(sess, inputs={'rescaled_image_in': rescaled_image_in_ph}, outputs={'pi': pi, 'v': v})
 
     def update():
         inputs = {k:v for k,v in zip(all_phs, buf.get())}
-        inputs[pi_rnn_state_ph] = np.zeros((1, gru_units), np.float32)
-        inputs[v_rnn_state_ph] = np.zeros((1, gru_units), np.float32)
+        inputs[pi_rnn_state_ph] = np.zeros((trials_per_epoch, gru_units), np.float32)
+        inputs[v_rnn_state_ph] = np.zeros((trials_per_epoch, gru_units), np.float32)
+        inputs[max_seq_len_ph] = int(episodes_per_trial * max_ep_len)
+
+        # just for debug purpose. no real use
+        inputs[seq_len_ph] = [3] * trials_per_epoch
         pi_l_old, v_l_old, ent = sess.run([pi_loss, v_loss, approx_ent], feed_dict=inputs)
         
         # Training
         for i in range(train_pi_iters):
+            print(f'pi: {i}')
             _, kl = sess.run([train_pi, approx_kl], feed_dict=inputs)
             kl = mpi_avg(kl)
             if kl > 1.5 * target_kl:
@@ -246,6 +273,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
                 break
         logger.store(StopIter=i)
         for _ in range(train_v_iters):
+            print(f'v: {_}')
+
             sess.run(train_v, feed_dict=inputs)
 
         # Log changes from update
@@ -259,51 +288,96 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
     start_time = time.time()
     o, r, d, ep_ret, ep_len = env.reset(), np.zeros(1), False, 0, 0
 
+    def recenter_rgb(image, min=0.0, max=255.0):
+        '''
+
+        :param image:
+        :param min:
+        :param max:
+        :return: an image with rgb value re-centered to [-1, 1]
+        '''
+        mid = (min + max) / 2.0
+        return np.apply_along_axis(func1d=lambda x: (x - mid) / mid, axis=2, arr=image)
+
+    o_rescaled = recenter_rgb(sess.run(rescale_image_op, feed_dict={raw_input_ph: o}))
+    # x_t = sess.run(x_ph, feed_dict={raw_input: o_expanded})
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
-        for trail in range(trials):
+        for trail in range(trials_per_epoch):
+            # TODO: match episode settings with paper
+            # TODO: tweek settings to match the paper
+
+            # TODO: find a way to generate mazes
             print(trail)
             last_a = np.array(0)
             last_r = np.array(r)
             last_pi_rnn_state = np.zeros((1, gru_units), np.float32)
             last_v_rnn_state = np.zeros((1, gru_units), np.float32)
-            means = env.sample_tasks(1)[0]
-            print('task means:', means)
-            action_dict = defaultdict(int)
-            env.reset_task(means)
-            for episode in range(n):
-                a, v_t, logp_t, pi_rnn_state_t, v_rnn_state_t = sess.run(
-                        get_action_ops, feed_dict={
-                                x_ph: o.reshape(1,-1), 
-                                a_ph: last_a.reshape(-1,), 
-                                rew_ph: last_r.reshape(-1,1), 
-                                pi_rnn_state_ph: last_pi_rnn_state, 
-                                v_rnn_state_ph: last_v_rnn_state})
-                action_dict[a[0]] += 1
-                # save and log
-                buf.store(o, a, r, v_t, logp_t)
-                logger.store(VVals=v_t)
-                o, r, d, _ = env.step(a[0])
-                ep_ret += r
-                ep_len += 1
-                
-                last_a = a[0]
-                last_r = np.array(r)
-                last_pi_rnn_state = pi_rnn_state_t
-                last_v_rnn_state = v_rnn_state_t
-    
-                terminal = d or (ep_len == max_ep_len)
-                if terminal or (t==n-1):
-                    if not(terminal):
-                        print('Warning: trajectory cut off by epoch at %d steps.'%ep_len)
-                    # if trajectory didn't reach terminal state, bootstrap value target
-                    last_val = r if d else sess.run(v, feed_dict={x_ph: o.reshape(1,-1)})
-                    buf.finish_path(last_val)
-                    if terminal:
-                        # only save EpRet / EpLen if trajectory finished
-                        logger.store(EpRet=ep_ret, EpLen=ep_len)
-                    o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
-            print(action_dict)
+            # means = env.sample_tasks(1)[0]
+            # print('task means:', means)
+            # env.reset_task(means)
+            step_counter = 0
+            for episode in range(episodes_per_trial):
+                o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+                o_rescaled = recenter_rgb(sess.run(rescale_image_op, feed_dict={raw_input_ph: o}))
+
+                action_dict = defaultdict(int)
+
+                for step in range(max_ep_len):
+                    a, v_t, logp_t, pi_rnn_state_t, v_rnn_state_t, logits_t = sess.run(
+                            get_action_ops, feed_dict={
+                                    rescaled_image_in_ph: np.expand_dims(o_rescaled, 0),
+                                    a_ph: last_a.reshape(-1,),
+                                    rew_ph: last_r.reshape(-1,1),
+                                    pi_rnn_state_ph: last_pi_rnn_state,
+                                    v_rnn_state_ph: last_v_rnn_state,
+                                    max_seq_len_ph: 1,
+                        seq_len_ph: [1]})
+                    action_dict[a[0]] += 1
+                    print(logits_t)
+                    # save and log
+                    buf.store(o_rescaled, a, r, v_t, logp_t)
+                    logger.store(VVals=v_t)
+                    o, r, d, _ = env.step(a[0])
+                    step_counter += 1
+                    o_rescaled = recenter_rgb(sess.run(rescale_image_op, feed_dict={raw_input_ph: o}))
+                    # o_expanded = np.expand_dims(o, 0)
+                    # x_t = sess.run(x_ph, feed_dict={raw_input: o_expanded})
+                    ep_ret += r
+                    ep_len += 1
+
+                    last_a = a[0]
+                    last_r = np.array(r)
+                    last_pi_rnn_state = pi_rnn_state_t
+                    last_v_rnn_state = v_rnn_state_t
+
+                    terminal = d or (ep_len == max_ep_len)
+                    if terminal or (step==n-1):
+                        if not(terminal):
+                            print('Warning: trajectory cut off by epoch at %d steps.'%ep_len)
+                        # if trajectory didn't reach terminal state, bootstrap value target
+                        last_val = r if d else sess.run(v, feed_dict={rescaled_image_in_ph: np.expand_dims(o_rescaled, 0),
+                                    a_ph: last_a.reshape(-1,),
+                                    rew_ph: last_r.reshape(-1,1),
+                                    pi_rnn_state_ph: last_pi_rnn_state,
+                                    v_rnn_state_ph: last_v_rnn_state,
+                                    max_seq_len_ph: 1,
+                                                                      seq_len_ph: [1]})
+                        buf.finish_path(last_val)
+                        if terminal:
+                            # only save EpRet / EpLen if trajectory finished
+                            logger.store(EpRet=ep_ret, EpLen=ep_len)
+
+                        print(f'episode terminated with {step} steps. epoch:{epoch} trial:{trail} episode:{episode}')
+                        break
+                    # o_expanded = np.expand_dims(o, 0)
+                    # x_t = sess.run(x_ph, feed_dict={raw_input: o_expanded})
+                print(action_dict)
+
+            if step_counter < episodes_per_trial * max_ep_len:
+                buf.pad_zeros(episodes_per_trial * max_ep_len - step_counter)
+
+            # pad zeros to sequence buffer after each trial
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs-1):
             logger.save_state({'env': env}, None)
@@ -315,7 +389,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
         logger.log_tabular('EpRet', with_min_and_max=True)
         logger.log_tabular('EpLen', average_only=True)
         logger.log_tabular('VVals', with_min_and_max=True)
-        logger.log_tabular('TotalEnvInteracts', (epoch+1)*batch_size)
+        logger.log_tabular('TotalEnvInteracts', (epoch+1)*trials_per_epoch*episodes_per_trial*max_ep_len)
         logger.log_tabular('LossPi', average_only=True)
         logger.log_tabular('LossV', average_only=True)
         logger.log_tabular('DeltaLossPi', average_only=True)
@@ -330,30 +404,33 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
 if __name__ == '__main__':
     tf.reset_default_graph()
     exp_name = 'ppo'
-    num_arms = 5
-    env = BernoulliBanditEnv
-    env_fn = env(num_arms)
+    env = VizdoomBasic
+    env_fn = env()
     actor_critic = core.gru_actor_critic
     ac_kwargs=dict()
     seed = 0
     gru_units = 256
-    batch_size = 250000
-    n = 100
+
+    # batch_size = 10000
+    n = 200
     epochs=100
+    trials_per_epoch = 20
+    episodes_per_trial = 2
+    max_ep_len=250
+
     gamma=0.99
     clip_ratio=0.2
     pi_lr=3e-4
     vf_lr=1e-3
-    train_pi_iters=1000
-    train_v_iters=1000
+    train_pi_iters=100
+    train_v_iters=100
     lam=0.3
-    max_ep_len=1000
     target_kl=0.01
     logger_kwargs=dict()
     save_freq=10
     from run_utils import setup_logger_kwargs
     logger_kwargs = setup_logger_kwargs(exp_name, seed)
     ppo(lambda: env_fn, actor_critic, ac_kwargs, seed, gru_units,
-        batch_size, n, epochs, gamma, clip_ratio, pi_lr,
+        trials_per_epoch, episodes_per_trial, n, epochs, gamma, clip_ratio, pi_lr,
         vf_lr, train_pi_iters, train_v_iters, lam, max_ep_len,
         target_kl, logger_kwargs, save_freq)
