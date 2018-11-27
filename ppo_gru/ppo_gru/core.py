@@ -2,7 +2,7 @@ import numpy as np
 import tensorflow as tf
 import scipy.signal
 from gym.spaces import Box, Discrete
-from gru import GRU
+from gru import GRU, WeightedNormGRUCell
 
 EPS = 1e-8
 
@@ -107,6 +107,8 @@ def gru(x, a, rew, rnn_state, n_hidden, n, activation, output_size):
     hidden = tf.concat([x, a, rew], 1)
     # use layer normalization for gru
     gru_cell = GRU(n_hidden, activation=activation)
+    # weight normalization for GRUCell
+    # gru_cell = WeightedNormGRUCell(n_hidden, activation=activation)
 #    gru_cell = tf.nn.rnn_cell.GRUCell(n_hidden, activation=activation, kernel_initializer=tf.initializers.orthogonal(), bias_initializer=tf.initializers.zeros())
     rnn_in = tf.expand_dims(hidden, [0])
     step_size = tf.minimum(tf.shape(rew)[:1], n)
@@ -115,6 +117,8 @@ def gru(x, a, rew, rnn_state, n_hidden, n, activation, output_size):
         time_major=False)
     state_out = gru_state[:1, :]
     rnn_out = tf.reshape(gru_outputs, [-1, n_hidden])
+    # weight normalization for dense layer
+    # out = dense(rnn_out, output_size)
     out = tf.layers.dense(rnn_out, units=output_size, 
                           kernel_initializer=tf.initializers.glorot_normal(), 
                           bias_initializer=tf.zeros_initializer(),)
@@ -159,4 +163,29 @@ def denseblock(x, a, rew, dilation_rate, num_filter, action_space):
     return tf.concat([input, activations], 1)
 
 #def tcblock(x, a, rew, seq_length, num_filter):
-    
+
+
+def dense(x, num_units, nonlinearity=None, use_weight_normalization=True, name=''):
+
+    with tf.variable_scope(name):
+        V = tf.get_variable('V', shape=[int(x.get_shape()[1]),num_units], dtype=tf.float32,
+                              initializer=tf.initializers.glorot_normal(), trainable=True)
+        b = tf.get_variable('b', shape=[num_units], dtype=tf.float32,
+                              initializer=tf.zeros_initializer(), trainable=True)
+
+        if use_weight_normalization:
+            g = tf.get_variable('g', shape=[num_units], dtype=tf.float32,
+                              initializer=tf.zeros_initializer(), trainable=True)
+            x = tf.matmul(x, V)
+            scaler = g/tf.sqrt(tf.reduce_sum(tf.square(V),[0]))
+            x = tf.reshape(scaler,[1,num_units])*x
+            b = tf.reshape(b,[1,num_units])
+            x = x + b
+
+            x = tf.nn.bias_add(tf.matmul(x, V),b)
+
+        # apply nonlinearity
+        if nonlinearity is not None:
+            x = nonlinearity(x)
+
+        return x

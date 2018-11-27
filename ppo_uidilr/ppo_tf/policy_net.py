@@ -2,6 +2,7 @@ import gym
 import numpy as np
 import tensorflow as tf
 from tensorflow import nn
+from gru import WeightedNormGRUCell
 
 
 class Policy_net:
@@ -70,14 +71,14 @@ class PolicyGRUNet:
             rnn_in = tf.expand_dims(self.obs, [0])
 
             with tf.variable_scope('policy_net'):
-                gru_cell = nn.rnn_cell.GRUCell(256, activation=nn.relu, kernel_initializer=tf.initializers.orthogonal(), bias_initializer=tf.zeros_initializer())
+                gru_cell = WeightedNormGRUCell(256, activation=nn.relu, kernel_initializer=tf.initializers.orthogonal(), bias_initializer=tf.zeros_initializer())
                 outputs, states = nn.dynamic_rnn(gru_cell, inputs=rnn_in, dtype=tf.float32)
                 outputs = tf.reshape(outputs, [-1, 256])
                 self.act_probs = tf.layers.dense(outputs, activation=None, units=act_space.n, kernel_initializer=tf.glorot_normal_initializer(), bias_initializer=tf.zeros_initializer(),)
                 self.policy_states = states
 
             with tf.variable_scope('value_net'):
-                gru_cell = nn.rnn_cell.GRUCell(256, activation=nn.relu, kernel_initializer=tf.initializers.orthogonal(), bias_initializer=tf.zeros_initializer())
+                gru_cell = WeightedNormGRUCell(256, activation=nn.relu, kernel_initializer=tf.initializers.orthogonal(), bias_initializer=tf.zeros_initializer())
                 outputs, states = nn.dynamic_rnn(gru_cell, inputs=rnn_in, dtype=tf.float32)
                 outputs = tf.reshape(outputs, [-1, 256])
                 self.v_preds = tf.layers.dense(outputs, units=1, activation=None, kernel_initializer=tf.glorot_normal_initializer(), bias_initializer=tf.zeros_initializer())
