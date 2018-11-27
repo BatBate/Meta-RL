@@ -264,7 +264,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
         for trail in range(trials):
             print(trail)
             last_a = np.array(0)
-            last_r = np.array(r)
+            last_r = np.array(0)
             last_pi_rnn_state = np.zeros((1, gru_units), np.float32)
             last_v_rnn_state = np.zeros((1, gru_units), np.float32)
             means = env.sample_tasks(1)[0]

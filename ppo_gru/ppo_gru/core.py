@@ -153,3 +153,38 @@ def gru_actor_critic(x, a, rew, pi_rnn_state, v_rnn_state, n_hidden, n, activati
         v, new_v_rnn_state = gru(x, a, rew, v_rnn_state, n_hidden, n, activation, 1)
         v = tf.squeeze(v, axis=1)
     return pi, logp, logp_pi, v, new_pi_rnn_state, new_v_rnn_state
+
+def denseblock(x, a, rew, dilation_rate, num_filter, action_space):
+    act_dim = action_space.n
+    a = tf.one_hot(a, depth=act_dim)
+    input = tf.concat([x, a, rew], 1)
+    xf = tf.keras.layers.Conv1D(input.shape[-1], num_filter, dilation_rate=dilation_rate)
+    xg = tf.keras.layers.Conv1D(input.shape[-1], num_filter, dilation_rate=dilation_rate)
+    activations = tf.tanh(xf) * tf.sigmoid(xg)
+    return tf.concat([input, activations], 1)
+
+#def tcblock(x, a, rew, seq_length, num_filter):
+
+
+def dense(x, num_units, nonlinearity=None, use_weight_normalization=True, name=''):
+
+    with tf.variable_scope(name):
+        V = tf.get_variable('V', shape=[int(x.get_shape()[1]),num_units], dtype=tf.float32,
+                              initializer=tf.initializers.glorot_normal(), trainable=True)
+        b = tf.get_variable('b', shape=[num_units], dtype=tf.float32,
+                              initializer=tf.zeros_initializer(), trainable=True)
+
+        if use_weight_normalization:
+            g = tf.get_variable('g', shape=[num_units], dtype=tf.float32,
+                              initializer=tf.zeros_initializer(), trainable=True)
+            x = tf.matmul(x, V)
+            scaler = g/tf.sqrt(tf.reduce_sum(tf.square(V),[0]))
+            x = tf.reshape(scaler,[1,num_units])*x
+            b = tf.reshape(b,[1,num_units])
+            x = x + b
+
+        # apply nonlinearity
+        if nonlinearity is not None:
+            x = nonlinearity(x)
+
+        return x
