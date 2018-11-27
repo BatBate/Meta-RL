@@ -74,7 +74,7 @@ class PolicyGRUNet:
                 gru_cell = WeightedNormGRUCell(256, activation=nn.relu, kernel_initializer=tf.initializers.orthogonal(), bias_initializer=tf.zeros_initializer())
                 outputs, states = nn.dynamic_rnn(gru_cell, inputs=rnn_in, dtype=tf.float32)
                 outputs = tf.reshape(outputs, [-1, 256])
-                self.act_probs = tf.layers.dense(outputs, activation=None, units=act_space.n, kernel_initializer=tf.glorot_normal_initializer(), bias_initializer=tf.zeros_initializer(),)
+                self.act_probs = dense(outputs, act_space.n, nonlinearity=None)
                 self.policy_states = states
 
             with tf.variable_scope('value_net'):
@@ -105,3 +105,27 @@ class PolicyGRUNet:
 
     def get_trainable_variables(self):
         return tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.scope)
+
+
+def dense(x, num_units, nonlinearity=None, use_weight_normalization=True, name=''):
+
+    with tf.variable_scope(name):
+        V = tf.get_variable('V', shape=[int(x.get_shape()[1]),num_units], dtype=tf.float32,
+                              initializer=tf.initializers.glorot_normal(), trainable=True)
+        b = tf.get_variable('b', shape=[num_units], dtype=tf.float32,
+                              initializer=tf.zeros_initializer(), trainable=True)
+
+        if use_weight_normalization:
+            g = tf.get_variable('g', shape=[num_units], dtype=tf.float32,
+                              initializer=tf.zeros_initializer(), trainable=True)
+            x = tf.matmul(x, V)
+            scaler = g/tf.sqrt(tf.reduce_sum(tf.square(V),[0]))
+            x = tf.reshape(scaler,[1,num_units])*x
+            b = tf.reshape(b,[1,num_units])
+            x = x + b
+
+        # apply nonlinearity
+        if nonlinearity is not None:
+            x = nonlinearity(x)
+
+        return x
