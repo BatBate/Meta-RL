@@ -8,7 +8,7 @@ import math
 
 EPS = 1e-8
 
-n = 100
+n = 10
 MASK = np.array([[-float('inf') if i>j else 1 for i in range(n)] for j in range(n)])
 
 
@@ -213,7 +213,7 @@ def snail_bandit(a, rew, seq_length, action_space):
         print("shaple of logp_all:", logp_all.shape)
         pi = tf.multinomial(logits, 1)
         print("shaple of pi:", pi.shape)
-        logp = tf.reduce_sum(a * logp_all, axis=2)
+        logp = tf.reduce_sum(tf.reshape(a, [-1, act_dim]) * logp_all, axis=1)
         print("shaple of logp:", logp.shape)
         print("shape of one hot pi:", tf.one_hot(pi, depth=act_dim).shape)
         logp_pi = tf.reduce_sum(tf.squeeze(tf.one_hot(pi, depth=act_dim), axis=1) * logp_all, axis=1)
@@ -226,7 +226,7 @@ def snail_bandit(a, rew, seq_length, action_space):
         value_net = attention_block(value_net, 16, 16)
         v = tf.layers.dense(value_net, 1)
         print("shape of v:", v.shape)
-        v = tf.squeeze(v, axis=2)
+        v = tf.reshape(tf.squeeze(v, axis=2), [-1])
         print("shape of v after squeeze:", v.shape)
     return pi, logp, logp_pi, v
 

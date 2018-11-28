@@ -239,12 +239,13 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     def update():
         inputs = {k:v for k,v in zip(all_phs, buf.get())}
-        inputs[a_ph] = np.tril(np.transpose(np.repeat(inputs[a_ph], n).reshape(trials, n, n), [0, 2, 1]))
-        inputs[rew_ph] = np.tril(np.transpose(np.repeat(inputs[rew_ph], n).reshape(trials, n, n), [0, 2, 1]))
-        
-        inputs[adv_ph] = inputs[adv_ph].reshape(trials, n)
-        inputs[ret_ph] = inputs[ret_ph].reshape(trials, n)
-        inputs[logp_old_ph] = inputs[logp_old_ph].reshape(trials, n)
+#        inputs[a_ph] = np.tril(np.transpose(np.repeat(inputs[a_ph], n).reshape(trials, n, n), [0, 2, 1]))
+#        inputs[rew_ph] = np.tril(np.transpose(np.repeat(inputs[rew_ph], n).reshape(trials, n, n), [0, 2, 1]))
+        inputs[a_ph] = inputs[a_ph].reshape(trials, n)
+        inputs[rew_ph] = inputs[rew_ph].reshape(trials, n)
+#        inputs[adv_ph] = inputs[adv_ph].reshape(trials, n)
+#        inputs[ret_ph] = inputs[ret_ph].reshape(trials, n)
+#        inputs[logp_old_ph] = inputs[logp_old_ph].reshape(trials, n)
         pi_l_old, v_l_old, ent = sess.run([pi_loss, v_loss, approx_ent], feed_dict=inputs)
         
         # Training
@@ -293,7 +294,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 #                choosen_v_t = v_t[0, episode]
 #                choosen_logp_t = logp_t[episode]
                 choosen_a = a[-1, 0]
-                choosen_v_t = v_t[0, -1]
+                choosen_v_t = v_t[-1]
                 choosen_logp_t = logp_t[-1]
                 action_dict[choosen_a] += 1
                 # save and log
@@ -350,8 +351,8 @@ if __name__ == '__main__':
     actor_critic = core.snail_actor_critic
     ac_kwargs=dict()
     seed = 0
-    batch_size = 250000
-    n = 100
+    batch_size = 100
+    n = 10
     epochs=100
     gamma=0.99
     clip_ratio=0.2
