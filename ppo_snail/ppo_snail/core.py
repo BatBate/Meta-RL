@@ -207,11 +207,17 @@ def snail_bandit(a, rew, seq_length, action_space):
         print("shaple of policy_net:", policy_net.shape)
         logits = tf.layers.dense(policy_net, act_dim)
         print("shaple of logits:", logits.shape)
+        logits = tf.reshape(logits,[-1, act_dim])
+        print("shaple of logits after reshape:", logits.shape)
         logp_all = tf.nn.log_softmax(logits)
         print("shaple of logp_all:", logp_all.shape)
         pi = tf.multinomial(logits, 1)
+        print("shaple of pi:", pi.shape)
         logp = tf.reduce_sum(a * logp_all, axis=2)
-        logp_pi = tf.reduce_sum(tf.one_hot(pi, depth=act_dim) * logp_all, axis=2)
+        print("shaple of logp:", logp.shape)
+        print("shape of one hot pi:", tf.one_hot(pi, depth=act_dim).shape)
+        logp_pi = tf.reduce_sum(tf.squeeze(tf.one_hot(pi, depth=act_dim), axis=1) * logp_all, axis=1)
+        print("shaple of logp_pi:", logp_pi.shape)
 
     with tf.variable_scope('v'):
         value_net = tcb_lock(input_layer, seq_length, 16)
@@ -219,7 +225,9 @@ def snail_bandit(a, rew, seq_length, action_space):
         # key_size = 16 and value_size = 16
         value_net = attention_block(value_net, 16, 16)
         v = tf.layers.dense(value_net, 1)
+        print("shape of v:", v.shape)
         v = tf.squeeze(v, axis=2)
+        print("shape of v after squeeze:", v.shape)
     return pi, logp, logp_pi, v
 
 def snail_actor_critic(a, rew, seq_length, policy=None, action_space=None):

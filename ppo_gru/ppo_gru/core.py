@@ -117,9 +117,9 @@ def gru(x, a, rew, rnn_state, n_hidden, n, activation, output_size):
     gru_outputs, gru_state = tf.nn.dynamic_rnn(gru_cell, rnn_in, sequence_length=[n], dtype=tf.float32, time_major=False)
     state_out = gru_state[:1, :]
     rnn_out = tf.reshape(gru_outputs, [-1, n_hidden])
-    out = tf.layers.dense(rnn_out, units=output_size, 
-                          kernel_initializer=tf.initializers.glorot_normal(), 
-                          bias_initializer=tf.zeros_initializer(),)
+#    out = tf.layers.dense(rnn_out, units=output_size, 
+#                          kernel_initializer=tf.initializers.glorot_normal(), 
+#                          bias_initializer=tf.zeros_initializer(),)
 
     # layer normalization for dense layer
     # norm_out = tf.contrib.layers.layer_norm(out)
@@ -131,9 +131,14 @@ def gru_categorical_policy(x, a, rew, rnn_state, n_hidden, n, activation, output
     act_dim = action_space.n
     logits, state_out = gru(x, a, rew, rnn_state, n_hidden, n, activation, output_size)
     logp_all = tf.nn.log_softmax(logits)
+    print("shape of logp_all", logp_all.shape)
     pi = tf.squeeze(tf.multinomial(logits,1), axis=1)
+    print("shape of pi", pi.shape)
+    print("shape of a", a.shape)
     logp = tf.reduce_sum(a * logp_all, axis=1)
+    print("shape of logp", logp.shape)
     logp_pi = tf.reduce_sum(tf.one_hot(pi, depth=act_dim) * logp_all, axis=1)
+    print("shape of logp_pi", logp_pi.shape)
     return pi, logp, logp_pi, state_out
 
 def gru_actor_critic(x, a, rew, pi_rnn_state, v_rnn_state, n_hidden, n, activation=tf.nn.relu, 
@@ -152,4 +157,5 @@ def gru_actor_critic(x, a, rew, pi_rnn_state, v_rnn_state, n_hidden, n, activati
     with tf.variable_scope('v'):
         v, new_v_rnn_state = gru(x, a, rew, v_rnn_state, n_hidden, n, activation, 1)
         v = tf.squeeze(v, axis=1)
+        print("shape of v", v.shape)
     return pi, logp, logp_pi, v, new_pi_rnn_state, new_v_rnn_state
