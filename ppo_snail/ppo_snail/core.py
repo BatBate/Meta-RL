@@ -3,8 +3,14 @@ import tensorflow as tf
 import scipy.signal
 from gym.spaces import Box, Discrete
 from gru import GRU
+from CausalConv1D import CausalConv1D
+import math
 
 EPS = 1e-8
+
+n = 100
+MASK = np.array([[-float('inf') if i>j else 1 for i in range(n)] for j in range(n)])
+
 
 def combined_shape(length, shape=None):
     if shape is None:
@@ -149,14 +155,76 @@ def gru_actor_critic(x, a, rew, pi_rnn_state, v_rnn_state, n_hidden, n, activati
         v = tf.squeeze(v, axis=1)
     return pi, logp, logp_pi, v, new_pi_rnn_state, new_v_rnn_state
 
-def denseblock(x, a, rew, dilation_rate, num_filter, action_space):
+def dense_block(inputs, dilation_rate, num_filter):
+    kernel_size = 2
+#    xf = CausalConv1D(inputs, num_filter, kernel_size, dilation_rate=dilation_rate)
+#    xg = CausalConv1D(inputs, num_filter, kernel_size, dilation_rate=dilation_rate)
+    xf = tf.keras.layers.Conv1D(num_filter, kernel_size, padding="causal", dilation_rate=dilation_rate)(inputs)
+    xg = tf.keras.layers.Conv1D(num_filter, kernel_size, padding="causal", dilation_rate=dilation_rate)(inputs)
+    activations = tf.multiply(tf.nn.tanh(xf), tf.nn.sigmoid(xg))
+    return tf.concat([inputs, activations], 2)
+
+def tcb_lock(inputs, seq_length, num_filter): 
+    for i in range(int(math.ceil(math.log2(seq_length)))):
+        inputs = dense_block(inputs, 2**(i+1), num_filter)
+    return inputs
+        
+def attention_block(inputs, key_size, value_size):
+    keys = tf.layers.dense(inputs, key_size)
+    query = tf.layers.dense(inputs, key_size)
+    print("shape of query:", query.shape)
+    logits = tf.matmul(query, tf.transpose(keys, perm=[0, 2, 1]))
+    print("shape of logits:", logits.shape)
+    batch_mask = tf.cast(tf.tile(tf.expand_dims(MASK, 0), [tf.shape(inputs)[0], 1, 1]), tf.float32)
+    # batch_mask = np.repeat(MASK[np.newaxis, :, :], keys.shape[0], axis=0)
+    print("shape of batch_mask:", batch_mask.shape)
+    print("type of batch_mask:", batch_mask.dtype)
+    print("type of logits:", logits.dtype)
+    mask_logits = tf.where(tf.equal(batch_mask, 1), logits, batch_mask)
+    print("shape of mask_logits:", mask_logits.shape)
+#    mask_logits = tf.keras.layers.Masking(mask_value=0)(logits)
+    probs = tf.nn.softmax(mask_logits / math.sqrt(key_size))
+    values = tf.layers.dense(inputs, value_size)
+    read = tf.matmul(probs, values)
+    return tf.concat([inputs, read], 2)
+
+def snail_bandit(a, rew, seq_length, action_space):
     act_dim = action_space.n
     a = tf.one_hot(a, depth=act_dim)
-    input = tf.concat([x, a, rew], 1)
-    xf = tf.keras.layers.Conv1D(input.shape[-1], num_filter, dilation_rate=dilation_rate)
-    xg = tf.keras.layers.Conv1D(input.shape[-1], num_filter, dilation_rate=dilation_rate)
-    activations = tf.tanh(xf) * tf.sigmoid(xg)
-    return tf.concat([input, activations], 1)
+    rew = tf.expand_dims(rew, -1)
+    # inputs shape: batch_size * sequence_length * input_dimensionality
+    inputs = tf.concat([rew, a], 2)
+    print("shape of inputs:", inputs)
+    input_layer = tf.layers.dense(inputs, units=32, 
+                          kernel_initializer=tf.initializers.glorot_normal(), 
+                          bias_initializer=tf.zeros_initializer(),)
+    print("shape of input_layer:", input_layer.shape)
+    with tf.variable_scope('pi'):
+        policy_net = tcb_lock(input_layer, seq_length, 32)
+        policy_net = tcb_lock(policy_net, seq_length, 32)
+        # key_size = 32 and value_size = 32
+        policy_net = attention_block(policy_net, 32, 32)
+        print("shaple of policy_net:", policy_net.shape)
+        logits = tf.layers.dense(policy_net, act_dim)
+        print("shaple of logits:", logits.shape)
+        logp_all = tf.nn.log_softmax(logits)
+        print("shaple of logp_all:", logp_all.shape)
+        pi = tf.multinomial(logits, 1)
+        logp = tf.reduce_sum(a * logp_all, axis=2)
+        logp_pi = tf.reduce_sum(tf.one_hot(pi, depth=act_dim) * logp_all, axis=2)
 
-#def tcblock(x, a, rew, seq_length, num_filter):
-    
+    with tf.variable_scope('v'):
+        value_net = tcb_lock(input_layer, seq_length, 16)
+        value_net = tcb_lock(value_net, seq_length, 16)
+        # key_size = 16 and value_size = 16
+        value_net = attention_block(value_net, 16, 16)
+        v = tf.layers.dense(value_net, 1)
+        v = tf.squeeze(v, axis=2)
+    return pi, logp, logp_pi, v
+
+def snail_actor_critic(a, rew, seq_length, policy=None, action_space=None):
+    # only consider discrete experiment now
+    if policy is None and isinstance(action_space, Discrete):
+        policy = snail_bandit
+    pi, logp, logp_pi, v = policy(a, rew, seq_length, action_space)
+    return pi, logp, logp_pi, v

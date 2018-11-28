@@ -17,9 +17,9 @@ class PPOBuffer:
     for calculating the advantages of state-action pairs.
     """
 
-    def __init__(self, obs_dim, act_dim, size, gamma=0.99, lam=0.95):
-        self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
-        self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
+    def __init__(self, act_dim, size, gamma=0.99, lam=0.95):
+        # self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
+        self.act_buf = np.zeros(size, dtype=np.float32)
         self.adv_buf = np.zeros(size, dtype=np.float32)
         self.rew_buf = np.zeros(size, dtype=np.float32)
         self.ret_buf = np.zeros(size, dtype=np.float32)
@@ -28,12 +28,11 @@ class PPOBuffer:
         self.gamma, self.lam = gamma, lam
         self.ptr, self.path_start_idx, self.max_size = 0, 0, size
 
-    def store(self, obs, act, rew, val, logp):
+    def store(self, act, rew, val, logp):
         """
         Append one timestep of agent-environment interaction to the buffer.
         """
         assert self.ptr < self.max_size     # buffer has to have room so you can store
-        self.obs_buf[self.ptr] = obs
         self.act_buf[self.ptr] = act
         self.rew_buf[self.ptr] = rew
         self.val_buf[self.ptr] = val
@@ -80,8 +79,12 @@ class PPOBuffer:
         # the next two lines implement the advantage normalization trick
         adv_mean, adv_std = mpi_statistics_scalar(self.adv_buf)
         self.adv_buf = (self.adv_buf - adv_mean) / adv_std
-        return [self.obs_buf, self.act_buf, self.adv_buf, 
-                self.ret_buf, self.logp_buf, self.rew_buf.reshape(-1, 1)]
+        return [self.act_buf, self.adv_buf, self.ret_buf, self.logp_buf, self.rew_buf]
+        # return [self.act_buf.reshape(trials_per_epoch, steps_per_trial), 
+        # self.adv_buf.reshape(trials_per_epoch, steps_per_trial), 
+        # self.ret_buf.reshape(trials_per_epoch, steps_per_trial), 
+        # self.logp_buf.reshape(trials_per_epoch, steps_per_trial), 
+        # self.rew_buf.reshape((trials_per_epoch, steps_per_trial, 1))]
 
 
 """
@@ -91,8 +94,8 @@ Proximal Policy Optimization (by clipping),
 with early stopping based on approximate KL
 
 """
-def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gru_units=256,
-        batch_size=25000, n = 100, epochs=100, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
+def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
+        batch_size=250000, n = 100, epochs=100, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
         vf_lr=1e-3, train_pi_iters=1000, train_v_iters=80, lam=0.97, max_ep_len=1000,
         target_kl=0.01, logger_kwargs=dict(), save_freq=10):
     """
@@ -181,22 +184,24 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
     ac_kwargs['action_space'] = env.action_space
 
     # Inputs to computation graph
-    x_ph, a_ph = core.placeholders_from_spaces(env.observation_space, env.action_space)
-    rew_ph, adv_ph, ret_ph, logp_old_ph = core.placeholders(1, None, None, None)
-    pi_rnn_state_ph = tf.placeholder(tf.float32, [1, gru_units])
-    v_rnn_state_ph = tf.placeholder(tf.float32, [1, gru_units])
+    # x_ph, a_ph = core.placeholders_from_spaces(env.observation_space, env.action_space)
+    # rew_ph, adv_ph, ret_ph, logp_old_ph = core.placeholders(1, None, None, None)
+    a_ph = tf.placeholder(dtype=tf.int32, shape=(None, n), name='a_ph')
+    rew_ph = tf.placeholder(dtype=tf.float32, shape=(None, n), name='rew_ph')
+#    input_ph = tf.placeholder(dtype=tf.float32, shape=(None, None, n, None), name='rew_ph')
+    adv_ph = tf.placeholder(dtype=tf.float32, shape=(None), name='adv_ph')
+    ret_ph = tf.placeholder(dtype=tf.float32, shape=(None), name='ret_ph')
+    logp_old_ph = tf.placeholder(dtype=tf.float32, shape=(None), name='logp_old_ph')
     # Main outputs from computation graph
-    pi, logp, logp_pi, v, pi_rnn_state, v_rnn_state = actor_critic(
-            x_ph, a_ph, rew_ph, pi_rnn_state_ph, v_rnn_state_ph, gru_units, 
-            n, action_space=env.action_space)
+    pi, logp, logp_pi, v = actor_critic(a_ph, rew_ph, n, action_space=env.action_space)
 
     # Need all placeholders in *this* order later (to zip with data from buffer)
-    all_phs = [x_ph, a_ph, adv_ph, ret_ph, logp_old_ph, rew_ph]
+    all_phs = [a_ph, adv_ph, ret_ph, logp_old_ph, rew_ph]
 #    for ph in all_phs:
 #        print(ph.shape)
 
     # Every step, get: action, value, and logprob
-    get_action_ops = [pi, v, logp_pi, pi_rnn_state, v_rnn_state]
+    get_action_ops = [pi, v, logp_pi]
 
     # Experience buffer
     trials = batch_size // n
@@ -233,8 +238,12 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
 
     def update():
         inputs = {k:v for k,v in zip(all_phs, buf.get())}
-        inputs[pi_rnn_state_ph] = np.zeros((1, gru_units), np.float32)
-        inputs[v_rnn_state_ph] = np.zeros((1, gru_units), np.float32)
+        inputs[a_ph] = np.tril(np.transpose(np.repeat(inputs[a_ph], n).reshape(trials, n, n), [0, 2, 1]))
+        inputs[rew_ph] = np.tril(np.transpose(np.repeat(inputs[rew_ph], n).reshape(trials, n, n), [0, 2, 1]))
+        
+        inputs[adv_ph] = inputs[adv_ph].reshape(trials, n)
+        inputs[ret_ph] = inputs[ret_ph].reshape(trials, n)
+        inputs[logp_old_ph] = inputs[logp_old_ph].reshape(trials, n)
         pi_l_old, v_l_old, ent = sess.run([pi_loss, v_loss, approx_ent], feed_dict=inputs)
         
         # Training
@@ -263,41 +272,34 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
     for epoch in range(epochs):
         for trail in range(trials):
             print(trail)
-            last_a = np.array(0)
-            last_r = np.array(r)
-            last_pi_rnn_state = np.zeros((1, gru_units), np.float32)
-            last_v_rnn_state = np.zeros((1, gru_units), np.float32)
+            last_a = np.zeros(n).reshape(1, 1, n)
+            last_r = np.zeros(n).reshape(1, 1, n)
             means = env.sample_tasks(1)[0]
             print('task means:', means)
             action_dict = defaultdict(int)
             env.reset_task(means)
             for episode in range(n):
-                a, v_t, logp_t, pi_rnn_state_t, v_rnn_state_t = sess.run(
+                a, v_t, logp_t = sess.run(
                         get_action_ops, feed_dict={
-                                x_ph: o.reshape(1,-1), 
-                                a_ph: last_a.reshape(-1,), 
-                                rew_ph: last_r.reshape(-1,1), 
-                                pi_rnn_state_ph: last_pi_rnn_state, 
-                                v_rnn_state_ph: last_v_rnn_state})
+                                a_ph: last_a, 
+                                rew_ph: last_r})
                 action_dict[a[0]] += 1
                 # save and log
-                buf.store(o, a, r, v_t, logp_t)
+                buf.store(a, r, v_t, logp_t)
                 logger.store(VVals=v_t)
                 o, r, d, _ = env.step(a[0])
                 ep_ret += r
                 ep_len += 1
                 
-                last_a = a[0]
-                last_r = np.array(r)
-                last_pi_rnn_state = pi_rnn_state_t
-                last_v_rnn_state = v_rnn_state_t
+                last_a[0, 0, episode] = a[0]
+                last_r[0, 0, episode] = r
     
                 terminal = d or (ep_len == max_ep_len)
                 if terminal or (episode==n-1):
                     if not(terminal):
                         print('Warning: trajectory cut off by epoch at %d steps.'%ep_len)
                     # if trajectory didn't reach terminal state, bootstrap value target
-                    last_val = r if d else sess.run(v, feed_dict={x_ph: o.reshape(1,-1)})
+                    last_val = r
                     buf.finish_path(last_val)
                     if terminal:
                         # only save EpRet / EpLen if trajectory finished
@@ -333,10 +335,9 @@ if __name__ == '__main__':
     num_arms = 5
     env = GaussianBanditEnv
     env_fn = env(num_arms)
-    actor_critic = core.gru_actor_critic
+    actor_critic = core.snail_actor_critic
     ac_kwargs=dict()
     seed = 0
-    gru_units = 256
     batch_size = 250000
     n = 100
     epochs=100
@@ -353,7 +354,7 @@ if __name__ == '__main__':
     save_freq=10
     from run_utils import setup_logger_kwargs
     logger_kwargs = setup_logger_kwargs(exp_name, seed)
-    ppo(lambda: env_fn, actor_critic, ac_kwargs, seed, gru_units,
+    ppo(lambda: env_fn, actor_critic, ac_kwargs, seed,
         batch_size, n, epochs, gamma, clip_ratio, pi_lr,
         vf_lr, train_pi_iters, train_v_iters, lam, max_ep_len,
         target_kl, logger_kwargs, save_freq)
