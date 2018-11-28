@@ -9,6 +9,7 @@ from mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_pro
 from bandit import BernoulliBanditEnv, GaussianBanditEnv
 from collections import defaultdict
 from vizdoombasic import VizdoomBasic
+from vizdoommywayhome import VizdoomMyWayHome
 import tensorflow.contrib.slim as slim
 
 
@@ -205,11 +206,11 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
     # x_ph = slim.fully_connected(slim.flatten(conv2), 256, activation_fn=tf.nn.relu)
 
     rew_ph, adv_ph, ret_ph, logp_old_ph = core.placeholders(1, None, None, None)
-    pi_rnn_state_ph = tf.placeholder(tf.float32, [None, gru_units], name='pi_rnn_state_ph')
-    v_rnn_state_ph = tf.placeholder(tf.float32, [None, gru_units], name='v_rnn_state_ph')
+    rnn_state_ph = tf.placeholder(tf.float32, [None, gru_units], name='pi_rnn_state_ph')
+    # v_rnn_state_ph = tf.placeholder(tf.float32, [None, gru_units], name='v_rnn_state_ph')
     # Main outputs from computation graph
-    pi, logp, logp_pi, v, pi_rnn_state, v_rnn_state, logits = actor_critic(
-            image_out, a_ph, rew_ph, pi_rnn_state_ph, v_rnn_state_ph, gru_units,
+    pi, logp, logp_pi, v, rnn_state, logits = actor_critic(
+            image_out, a_ph, rew_ph, rnn_state_ph, gru_units,
             max_seq_len_ph,seq_len=seq_len_ph, action_space=env.action_space)
 
     # Need all placeholders in *this* order later (to zip with data from buffer)
@@ -218,7 +219,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
 #        print(ph.shape)
 
     # Every step, get: action, value, and logprob
-    get_action_ops = [pi, v, logp_pi, pi_rnn_state, v_rnn_state, logits]
+    get_action_ops = [pi, v, logp_pi, rnn_state, logits]
 
     # Experience buffer
     buffer_size = trials_per_epoch * episodes_per_trial * max_ep_len
@@ -255,8 +256,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
 
     def update():
         inputs = {k:v for k,v in zip(all_phs, buf.get())}
-        inputs[pi_rnn_state_ph] = np.zeros((trials_per_epoch, gru_units), np.float32)
-        inputs[v_rnn_state_ph] = np.zeros((trials_per_epoch, gru_units), np.float32)
+        inputs[rnn_state_ph] = np.zeros((trials_per_epoch, gru_units), np.float32)
+        # inputs[v_rnn_state_ph] = np.zeros((trials_per_epoch, gru_units), np.float32)
         inputs[max_seq_len_ph] = int(episodes_per_trial * max_ep_len)
 
         # just for debug purpose. no real use
@@ -268,9 +269,9 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
             print(f'pi: {i}')
             _, kl = sess.run([train_pi, approx_kl], feed_dict=inputs)
             kl = mpi_avg(kl)
-            if kl > 1.5 * target_kl:
-                logger.log('Early stopping at step %d due to reaching max kl.'%i)
-                break
+            # if kl > 1.5 * target_kl:
+            #     logger.log('Early stopping at step %d due to reaching max kl.'%i)
+            #     break
         logger.store(StopIter=i)
         for _ in range(train_v_iters):
             print(f'v: {_}')
@@ -304,15 +305,14 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         for trail in range(trials_per_epoch):
-            # TODO: match episode settings with paper
             # TODO: tweek settings to match the paper
 
             # TODO: find a way to generate mazes
             print(trail)
             last_a = np.array(0)
             last_r = np.array(r)
-            last_pi_rnn_state = np.zeros((1, gru_units), np.float32)
-            last_v_rnn_state = np.zeros((1, gru_units), np.float32)
+            last_rnn_state = np.zeros((1, gru_units), np.float32)
+            # last_v_rnn_state = np.zeros((1, gru_units), np.float32)
             # means = env.sample_tasks(1)[0]
             # print('task means:', means)
             # env.reset_task(means)
@@ -324,13 +324,13 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
                 action_dict = defaultdict(int)
 
                 for step in range(max_ep_len):
-                    a, v_t, logp_t, pi_rnn_state_t, v_rnn_state_t, logits_t = sess.run(
+                    a, v_t, logp_t, rnn_state_t, logits_t = sess.run(
                             get_action_ops, feed_dict={
                                     rescaled_image_in_ph: np.expand_dims(o_rescaled, 0),
                                     a_ph: last_a.reshape(-1,),
                                     rew_ph: last_r.reshape(-1,1),
-                                    pi_rnn_state_ph: last_pi_rnn_state,
-                                    v_rnn_state_ph: last_v_rnn_state,
+                                    rnn_state_ph: last_rnn_state,
+                                    # v_rnn_state_ph: last_v_rnn_state,
                                     max_seq_len_ph: 1,
                         seq_len_ph: [1]})
                     action_dict[a[0]] += 1
@@ -348,8 +348,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
 
                     last_a = a[0]
                     last_r = np.array(r)
-                    last_pi_rnn_state = pi_rnn_state_t
-                    last_v_rnn_state = v_rnn_state_t
+                    last_rnn_state = rnn_state_t
+                    # last_v_rnn_state = v_rnn_state_t
 
                     terminal = d or (ep_len == max_ep_len)
                     if terminal or (step==n-1):
@@ -359,8 +359,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
                         last_val = r if d else sess.run(v, feed_dict={rescaled_image_in_ph: np.expand_dims(o_rescaled, 0),
                                     a_ph: last_a.reshape(-1,),
                                     rew_ph: last_r.reshape(-1,1),
-                                    pi_rnn_state_ph: last_pi_rnn_state,
-                                    v_rnn_state_ph: last_v_rnn_state,
+                                    rnn_state_ph: last_rnn_state,
+                                    # v_rnn_state_ph: last_v_rnn_state,
                                     max_seq_len_ph: 1,
                                                                       seq_len_ph: [1]})
                         buf.finish_path(last_val)

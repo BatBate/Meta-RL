@@ -10,7 +10,7 @@ CONFIGS = [['basic.cfg', 3],                # 0
            ['defend_the_center.cfg', 3],    # 2
            ['defend_the_line.cfg', 3],      # 3
            ['health_gathering.cfg', 3],     # 4
-           ['my_way_home.cfg', 5],          # 5
+           ['my_way_home.cfg', 3],          # 5
            ['predict_position.cfg', 3],     # 6
            ['take_cover.cfg', 2],           # 7
            ['deathmatch.cfg', 20],          # 8
@@ -26,7 +26,7 @@ class VizdoomEnv(gym.Env):
         self.game.set_screen_resolution(ScreenResolution.RES_640X480)
         scenarios_dir = os.path.join(os.path.dirname(__file__), 'scenarios')
         self.game.load_config(os.path.join(scenarios_dir, CONFIGS[level][0]))
-        self.game.set_window_visible(False)
+        self.game.set_window_visible(True)
         self.game.init()
         self.state = None
 
