@@ -21,6 +21,9 @@ class PPOBuffer:
     """
 
     def __init__(self, obs_dim, act_dim, size, gamma=0.99, lam=0.95):
+        self.obs_dim = obs_dim
+        self.act_dim = act_dim
+        self.size = size
         self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
         self.adv_buf = np.zeros(size, dtype=np.float32)
@@ -30,6 +33,17 @@ class PPOBuffer:
         self.logp_buf = np.zeros(size, dtype=np.float32)
         self.gamma, self.lam = gamma, lam
         self.ptr, self.path_start_idx, self.max_size = 0, 0, size
+
+    def reset(self):
+        self.obs_buf = np.zeros(core.combined_shape(self.size, self.obs_dim), dtype=np.float32)
+        self.act_buf = np.zeros(core.combined_shape(self.size, self.act_dim), dtype=np.float32)
+        self.adv_buf = np.zeros(self.size, dtype=np.float32)
+        self.rew_buf = np.zeros(self.size, dtype=np.float32)
+        self.ret_buf = np.zeros(self.size, dtype=np.float32)
+        self.val_buf = np.zeros(self.size, dtype=np.float32)
+        self.logp_buf = np.zeros(self.size, dtype=np.float32)
+        self.ptr, self.path_start_idx = 0, 0
+
 
     def store(self, obs, act, rew, val, logp):
         """
@@ -91,6 +105,7 @@ class PPOBuffer:
         self.adv_buf = (self.adv_buf - adv_mean) / adv_std
         return [self.obs_buf, self.act_buf, self.adv_buf, 
                 self.ret_buf, self.logp_buf, self.rew_buf.reshape(-1, 1)]
+
 
 
 """
@@ -209,9 +224,11 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
     rnn_state_ph = tf.placeholder(tf.float32, [None, gru_units], name='pi_rnn_state_ph')
     # v_rnn_state_ph = tf.placeholder(tf.float32, [None, gru_units], name='v_rnn_state_ph')
     # Main outputs from computation graph
-    pi, logp, logp_pi, v, rnn_state, logits = actor_critic(
+
+    action_encoder_matrix = np.load(r'encoder.npy')
+    pi, logp, logp_pi, v, rnn_state, logits, seq_len_vec = actor_critic(
             image_out, a_ph, rew_ph, rnn_state_ph, gru_units,
-            max_seq_len_ph,seq_len=seq_len_ph, action_space=env.action_space)
+            max_seq_len_ph, action_encoder_matrix, seq_len=seq_len_ph, action_space=env.action_space)
 
     # Need all placeholders in *this* order later (to zip with data from buffer)
     all_phs = [rescaled_image_in_ph, a_ph, adv_ph, ret_ph, logp_old_ph, rew_ph]
@@ -245,6 +262,9 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
     train_pi = MpiAdamOptimizer(learning_rate=pi_lr).minimize(pi_loss)
     train_v = MpiAdamOptimizer(learning_rate=vf_lr).minimize(v_loss)
 
+    train = MpiAdamOptimizer(learning_rate=1e-4).minimize(pi_loss + v_loss - 0.001 * approx_ent)
+
+
     sess = tf.Session()
     sess.run(tf.global_variables_initializer())
 
@@ -256,6 +276,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
 
     def update():
         inputs = {k:v for k,v in zip(all_phs, buf.get())}
+        buf.reset()
         inputs[rnn_state_ph] = np.zeros((trials_per_epoch, gru_units), np.float32)
         # inputs[v_rnn_state_ph] = np.zeros((trials_per_epoch, gru_units), np.float32)
         inputs[max_seq_len_ph] = int(episodes_per_trial * max_ep_len)
@@ -265,18 +286,19 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
         pi_l_old, v_l_old, ent = sess.run([pi_loss, v_loss, approx_ent], feed_dict=inputs)
         
         # Training
+        print(f'sequence length = {sess.run(seq_len_vec, feed_dict=inputs)}')
         for i in range(train_pi_iters):
             print(f'pi: {i}')
             _, kl = sess.run([train_pi, approx_kl], feed_dict=inputs)
-            kl = mpi_avg(kl)
+            # kl = mpi_avg(kl)
             # if kl > 1.5 * target_kl:
             #     logger.log('Early stopping at step %d due to reaching max kl.'%i)
             #     break
         logger.store(StopIter=i)
-        for _ in range(train_v_iters):
-            print(f'v: {_}')
-
-            sess.run(train_v, feed_dict=inputs)
+        # for _ in range(train_v_iters):
+        #     print(f'v: {_}')
+        #
+        #     sess.run(train_v, feed_dict=inputs)
 
         # Log changes from update
         pi_l_new, v_l_new, kl, cf = sess.run(
@@ -362,11 +384,13 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
                                     rnn_state_ph: last_rnn_state,
                                     # v_rnn_state_ph: last_v_rnn_state,
                                     max_seq_len_ph: 1,
-                                                                      seq_len_ph: [1]})
+                                    seq_len_ph: [1]})
                         buf.finish_path(last_val)
-                        if terminal:
-                            # only save EpRet / EpLen if trajectory finished
-                            logger.store(EpRet=ep_ret, EpLen=ep_len)
+                        logger.store(EpRet=ep_ret, EpLen=ep_len)
+
+                        # if terminal:
+                        #     # only save EpRet / EpLen if trajectory finished
+                        #     logger.store(EpRet=ep_ret, EpLen=ep_len)
 
                         print(f'episode terminated with {step} steps. epoch:{epoch} trial:{trail} episode:{episode}')
                         break
@@ -414,15 +438,15 @@ if __name__ == '__main__':
     # batch_size = 10000
     n = 200
     epochs=100
-    trials_per_epoch = 20
+    trials_per_epoch = 2
     episodes_per_trial = 2
-    max_ep_len=250
+    max_ep_len=200
 
     gamma=0.99
     clip_ratio=0.2
     pi_lr=3e-4
     vf_lr=1e-3
-    train_pi_iters=100
+    train_pi_iters=10
     train_v_iters=100
     lam=0.3
     target_kl=0.01

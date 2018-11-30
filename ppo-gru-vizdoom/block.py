@@ -23,8 +23,6 @@ def dense(x, num_units, nonlinearity=None, use_weight_normalization=True, name='
             b = tf.reshape(b,[1,num_units])
             x = x + b
 
-            x = tf.nn.bias_add(tf.matmul(x, V),b)
-
         # apply nonlinearity
         if nonlinearity is not None:
             x = nonlinearity(x)
