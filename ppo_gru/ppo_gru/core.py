@@ -103,59 +103,78 @@ def mlp_actor_critic(x, a, hidden_sizes=(64,64), activation=tf.tanh,
         v = tf.squeeze(mlp(x, list(hidden_sizes)+[1], activation, None), axis=1)
     return pi, logp, logp_pi, v
 
-def gru(x, a, rew, rnn_state, n_hidden, n, activation, output_size):
-    inputs = tf.concat([x, a, rew], 1)   
+def gru(x, a, rew, rnn_state, gru_units, activation, output_size):
+    inputs = tf.concat([x, a, rew], 2)  
+    print('shape of inputs', inputs.shape)
     # weight normalization for GRUCell
-    gru_cell = WeightedNormGRUCell(n_hidden, activation=activation)
+#    gru_cell = WeightedNormGRUCell(gru_units, activation=activation)
     # layer normalization for gru
-#    gru_cell = tf.nn.rnn_cell.GRUCell(n_hidden, activation=activation, kernel_initializer=tf.initializers.orthogonal(), bias_initializer=tf.initializers.zeros())
-    rnn_in = tf.expand_dims(inputs, [0])
-#    step_size = tf.minimum(tf.shape(rew)[:1], n)
+    gru_cell = tf.nn.rnn_cell.GRUCell(gru_units, activation=activation, 
+                                      kernel_initializer=tf.initializers.orthogonal(), 
+                                      bias_initializer=tf.initializers.zeros())
+    print("state size of gru_cell", gru_cell.state_size)
+#    rnn_in = tf.expand_dims(inputs, [0])
+    rnn_in = inputs
+    print('shape of rnn_in', rnn_in.shape)
+#    step_size = tf.shape(rnn_in)[1]
 #    gru_outputs, gru_state = tf.nn.dynamic_rnn(
-#        gru_cell, rnn_in, initial_state=rnn_state, sequence_length=step_size,
-#        time_major=False)
-    gru_outputs, gru_state = tf.nn.dynamic_rnn(gru_cell, rnn_in, sequence_length=[n], dtype=tf.float32, time_major=False)
+#       gru_cell, rnn_in, initial_state=rnn_state, sequence_length=[step_size],
+#       time_major=False)
+    gru_outputs, gru_state = tf.nn.dynamic_rnn(
+       gru_cell, rnn_in, initial_state=rnn_state, sequence_length=None,
+       time_major=False)
+    print("shape of gru_outputs", gru_outputs.shape)
+    print("shape of gru_state", gru_state.shape)
     state_out = gru_state[:1, :]
-    rnn_out = tf.reshape(gru_outputs, [-1, n_hidden])
-#    out = tf.layers.dense(rnn_out, units=output_size, 
-#                          kernel_initializer=tf.initializers.glorot_normal(), 
-#                          bias_initializer=tf.zeros_initializer(),)
-
+    print("shape of state_out", state_out.shape)
+    rnn_out = tf.reshape(gru_outputs, [-1, gru_units])
+    print("shape of rnn_out", rnn_out.shape)
+    out = tf.layers.dense(rnn_out, units=output_size, 
+                          kernel_initializer=tf.initializers.glorot_normal(), 
+                          bias_initializer=tf.zeros_initializer(),)
+    print("shape of out", out.shape)
     # layer normalization for dense layer
-    # norm_out = tf.contrib.layers.layer_norm(out)
+    norm_out = tf.contrib.layers.layer_norm(out)
     # weight normalization for dense layer
-    norm_out = dense(rnn_out, output_size)
+#    norm_out = dense(rnn_out, output_size)
     return norm_out, state_out
     
-def gru_categorical_policy(x, a, rew, rnn_state, n_hidden, n, activation, output_size, action_space):
+def gru_categorical_policy(x, a, rew, rnn_state, gru_units, activation, output_size, action_space):
     act_dim = action_space.n
-    logits, state_out = gru(x, a, rew, rnn_state, n_hidden, n, activation, output_size)
+    logits, state_out = gru(x, a, rew, rnn_state, gru_units, activation, output_size)
+    print("shape of logits", logits.shape)
+    print("shape of state_out", state_out.shape)
     logp_all = tf.nn.log_softmax(logits)
     print("shape of logp_all", logp_all.shape)
-    pi = tf.squeeze(tf.multinomial(logits,1), axis=1)
+    pi = tf.squeeze(tf.multinomial(logits, 1), axis=1)
     print("shape of pi", pi.shape)
-    print("shape of a", a.shape)
-    logp = tf.reduce_sum(a * logp_all, axis=1)
+    logp = tf.reduce_sum(tf.reshape(a, [-1, act_dim]) * logp_all, axis=1)
     print("shape of logp", logp.shape)
     logp_pi = tf.reduce_sum(tf.one_hot(pi, depth=act_dim) * logp_all, axis=1)
     print("shape of logp_pi", logp_pi.shape)
-    return pi, logp, logp_pi, state_out
+#    return pi, logp, logp_pi, state_out
+    return pi, logp, logp_pi, state_out, tf.exp(logp_all)
 
-def gru_actor_critic(x, a, rew, pi_rnn_state, v_rnn_state, n_hidden, n, activation=tf.nn.relu, 
+def gru_actor_critic(x, a, rew, pi_rnn_state, v_rnn_state, gru_units, activation=tf.nn.relu, 
                      output_activation=None, policy=None, action_space=None):
     # only consider discrete experiment now
     if policy is None and isinstance(action_space, Discrete):
         policy = gru_categorical_policy
     act_dim = action_space.n
-    a = tf.one_hot(a, depth=act_dim)
-#    print('shape of a in one_hot', a.shape)
+    a = tf.squeeze(tf.one_hot(a, depth=act_dim), axis=2)
+    print('shape of a after one hot', a.shape)
     with tf.variable_scope('pi'):
-        pi, logp, logp_pi, new_pi_rnn_state = policy(x, a, rew, 
-                                                     pi_rnn_state, n_hidden, 
-                                                     n, activation, act_dim, 
+#        pi, logp, logp_pi, new_pi_rnn_state = policy(x, a, rew, 
+#                                                     pi_rnn_state, gru_units, 
+#                                                     activation, act_dim, 
+#                                                     action_space)
+        pi, logp, logp_pi, new_pi_rnn_state, prob = policy(x, a, rew, 
+                                                     pi_rnn_state, gru_units, 
+                                                     activation, act_dim, 
                                                      action_space)
     with tf.variable_scope('v'):
-        v, new_v_rnn_state = gru(x, a, rew, v_rnn_state, n_hidden, n, activation, 1)
+        v, new_v_rnn_state = gru(x, a, rew, v_rnn_state, gru_units, activation, 1)
         v = tf.squeeze(v, axis=1)
         print("shape of v", v.shape)
-    return pi, logp, logp_pi, v, new_pi_rnn_state, new_v_rnn_state
+#    return pi, logp, logp_pi, v, new_pi_rnn_state, new_v_rnn_state
+    return pi, logp, logp_pi, v, new_pi_rnn_state, new_v_rnn_state, prob
