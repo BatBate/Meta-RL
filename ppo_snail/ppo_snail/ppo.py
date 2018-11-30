@@ -8,6 +8,7 @@ from mpi_tf import MpiAdamOptimizer, sync_all_params
 from mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
 from bandit import BernoulliBanditEnv, GaussianBanditEnv
 from collections import defaultdict
+from collections import deque
 
 
 class PPOBuffer:
@@ -205,7 +206,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     # Experience buffer
     trials = batch_size // n
-    buf = PPOBuffer(obs_dim, act_dim, batch_size, gamma, lam)
+    buf = PPOBuffer(act_dim, batch_size, gamma, lam)
 
     # Count variables
     var_counts = tuple(core.count_vars(scope) for scope in ['pi', 'v'])
@@ -234,16 +235,17 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     sess.run(sync_all_params())
 
     # Setup model saving
-    logger.setup_tf_saver(sess, inputs={'x': x_ph}, outputs={'pi': pi, 'v': v})
+#    logger.setup_tf_saver(sess, inputs={'x': x_ph}, outputs={'pi': pi, 'v': v})
 
     def update():
         inputs = {k:v for k,v in zip(all_phs, buf.get())}
-        inputs[a_ph] = np.tril(np.transpose(np.repeat(inputs[a_ph], n).reshape(trials, n, n), [0, 2, 1]))
-        inputs[rew_ph] = np.tril(np.transpose(np.repeat(inputs[rew_ph], n).reshape(trials, n, n), [0, 2, 1]))
-        
-        inputs[adv_ph] = inputs[adv_ph].reshape(trials, n)
-        inputs[ret_ph] = inputs[ret_ph].reshape(trials, n)
-        inputs[logp_old_ph] = inputs[logp_old_ph].reshape(trials, n)
+#        inputs[a_ph] = np.tril(np.transpose(np.repeat(inputs[a_ph], n).reshape(trials, n, n), [0, 2, 1]))
+#        inputs[rew_ph] = np.tril(np.transpose(np.repeat(inputs[rew_ph], n).reshape(trials, n, n), [0, 2, 1]))
+        inputs[a_ph] = inputs[a_ph].reshape(trials, n)
+        inputs[rew_ph] = inputs[rew_ph].reshape(trials, n)
+#        inputs[adv_ph] = inputs[adv_ph].reshape(trials, n)
+#        inputs[ret_ph] = inputs[ret_ph].reshape(trials, n)
+#        inputs[logp_old_ph] = inputs[logp_old_ph].reshape(trials, n)
         pi_l_old, v_l_old, ent = sess.run([pi_loss, v_loss, approx_ent], feed_dict=inputs)
         
         # Training
@@ -272,8 +274,10 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     for epoch in range(epochs):
         for trail in range(trials):
             print(trail)
-            last_a = np.zeros(n).reshape(1, 1, n)
-            last_r = np.zeros(n).reshape(1, 1, n)
+#            last_a = np.zeros(n).reshape(1, n)
+#            last_r = np.zeros(n).reshape(1, n)
+            last_a = deque(n * [0], n)
+            last_r = deque(n * [0], n)
             means = env.sample_tasks(1)[0]
             print('task means:', means)
             action_dict = defaultdict(int)
@@ -281,18 +285,27 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             for episode in range(n):
                 a, v_t, logp_t = sess.run(
                         get_action_ops, feed_dict={
-                                a_ph: last_a, 
-                                rew_ph: last_r})
-                action_dict[a[0]] += 1
+                                a_ph: np.array(last_a).reshape(1, n), 
+                                rew_ph: np.array(last_r).reshape(1, n)})
+#                print("a shape:", a.shape)
+#                print("v_t shape:", v_t.shape)
+#                print("logp_t shape:", logp_t.shape)
+#                choosen_a = a[episode, 0]
+#                choosen_v_t = v_t[0, episode]
+#                choosen_logp_t = logp_t[episode]
+                choosen_a = a[-1, 0]
+                choosen_v_t = v_t[-1]
+                choosen_logp_t = logp_t[-1]
+                action_dict[choosen_a] += 1
                 # save and log
-                buf.store(a, r, v_t, logp_t)
+                buf.store(choosen_a, r, choosen_v_t, choosen_logp_t)
                 logger.store(VVals=v_t)
-                o, r, d, _ = env.step(a[0])
+                o, r, d, _ = env.step(choosen_a)
                 ep_ret += r
                 ep_len += 1
                 
-                last_a[0, 0, episode] = a[0]
-                last_r[0, 0, episode] = r
+                last_a.append(choosen_a)
+                last_r.append(r)
     
                 terminal = d or (ep_len == max_ep_len)
                 if terminal or (episode==n-1):
@@ -338,8 +351,8 @@ if __name__ == '__main__':
     actor_critic = core.snail_actor_critic
     ac_kwargs=dict()
     seed = 0
-    batch_size = 250000
-    n = 100
+    batch_size = 100
+    n = 10
     epochs=100
     gamma=0.99
     clip_ratio=0.2

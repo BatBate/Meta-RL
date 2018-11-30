@@ -18,8 +18,10 @@ class PPOBuffer:
     """
 
     def __init__(self, obs_dim, act_dim, size, gamma=0.99, lam=0.95):
-        self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
-        self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
+        # self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
+        # self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
+        self.obs_buf = np.zeros(size, dtype=np.float32)
+        self.act_buf = np.zeros(size, dtype=np.float32)
         self.adv_buf = np.zeros(size, dtype=np.float32)
         self.rew_buf = np.zeros(size, dtype=np.float32)
         self.ret_buf = np.zeros(size, dtype=np.float32)
@@ -80,8 +82,8 @@ class PPOBuffer:
         # the next two lines implement the advantage normalization trick
         adv_mean, adv_std = mpi_statistics_scalar(self.adv_buf)
         self.adv_buf = (self.adv_buf - adv_mean) / adv_std
-        return [self.obs_buf, self.act_buf, self.adv_buf, 
-                self.ret_buf, self.logp_buf, self.rew_buf.reshape(-1, 1)]
+        return [self.obs_buf, self.act_buf, self.rew_buf, 
+                self.adv_buf, self.ret_buf, self.logp_buf]
 
 
 """
@@ -93,7 +95,7 @@ with early stopping based on approximate KL
 """
 def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gru_units=256,
         batch_size=25000, n = 100, epochs=100, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
-        vf_lr=1e-3, train_pi_iters=1000, train_v_iters=80, lam=0.97, max_ep_len=1000,
+        vf_lr=1e-3, train_pi_iters=1000, train_v_iters=1000, lam=0.97, max_ep_len=1000,
         target_kl=0.01, logger_kwargs=dict(), save_freq=10):
     """
 
@@ -181,17 +183,28 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
     ac_kwargs['action_space'] = env.action_space
 
     # Inputs to computation graph
-    x_ph, a_ph = core.placeholders_from_spaces(env.observation_space, env.action_space)
-    rew_ph, adv_ph, ret_ph, logp_old_ph = core.placeholders(1, None, None, None)
-    pi_rnn_state_ph = tf.placeholder(tf.float32, [1, gru_units])
-    v_rnn_state_ph = tf.placeholder(tf.float32, [1, gru_units])
+    # x_ph, a_ph = core.placeholders_from_spaces(env.observation_space, env.action_space)
+    # rew_ph, adv_ph, ret_ph, logp_old_ph = core.placeholders(1, None, None, None)
+    # pi_rnn_state_ph = tf.placeholder(tf.float32, [1, gru_units])
+    # v_rnn_state_ph = tf.placeholder(tf.float32, [1, gru_units])
+    x_ph = tf.placeholder(dtype=tf.float32, shape=(None, None, 1), name='x_ph')
+    a_ph = tf.placeholder(dtype=tf.int32, shape=(None, None, 1), name='a_ph')
+    r_ph = tf.placeholder(dtype=tf.float32, shape=(None, None, 1), name='r_ph')
+    adv_ph = tf.placeholder(dtype=tf.float32, shape=(None), name='adv_ph')
+    ret_ph = tf.placeholder(dtype=tf.float32, shape=(None), name='ret_ph')
+    logp_old_ph = tf.placeholder(dtype=tf.float32, shape=(None), name='logp_old_ph')
+    pi_rnn_state_ph = tf.placeholder(dtype=tf.float32, shape=[None, gru_units], name='pi_rnn_state_ph')
+    v_rnn_state_ph = tf.placeholder(dtype=tf.float32, shape=[None, gru_units], name='v_rnn_state_ph')
     # Main outputs from computation graph
-    pi, logp, logp_pi, v, pi_rnn_state, v_rnn_state = actor_critic(
-            x_ph, a_ph, rew_ph, pi_rnn_state_ph, v_rnn_state_ph, gru_units, 
-            n, action_space=env.action_space)
+#    pi, logp, logp_pi, v, pi_rnn_state, v_rnn_state = actor_critic(
+#            x_ph, a_ph, r_ph, pi_rnn_state_ph, v_rnn_state_ph, gru_units,
+#            action_space=env.action_space)
+    pi, logp, logp_pi, v, pi_rnn_state, v_rnn_state, prob = actor_critic(
+            x_ph, a_ph, r_ph, pi_rnn_state_ph, v_rnn_state_ph, gru_units,
+            action_space=env.action_space)
 
     # Need all placeholders in *this* order later (to zip with data from buffer)
-    all_phs = [x_ph, a_ph, adv_ph, ret_ph, logp_old_ph, rew_ph]
+    all_phs = [x_ph, a_ph, r_ph, adv_ph, ret_ph, logp_old_ph]
 #    for ph in all_phs:
 #        print(ph.shape)
 
@@ -233,19 +246,23 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
 
     def update():
         inputs = {k:v for k,v in zip(all_phs, buf.get())}
-        inputs[pi_rnn_state_ph] = np.zeros((1, gru_units), np.float32)
-        inputs[v_rnn_state_ph] = np.zeros((1, gru_units), np.float32)
+        inputs[x_ph] = inputs[x_ph].reshape(-1, n, 1)
+        inputs[a_ph] = inputs[a_ph].reshape(-1, n, 1)
+        inputs[r_ph] = inputs[r_ph].reshape(-1, n, 1)
+        inputs[pi_rnn_state_ph] = np.zeros((trials, gru_units), np.float32)
+        inputs[v_rnn_state_ph] = np.zeros((trials, gru_units), np.float32)
         pi_l_old, v_l_old, ent = sess.run([pi_loss, v_loss, approx_ent], feed_dict=inputs)
         
         # Training
         for i in range(train_pi_iters):
             _, kl = sess.run([train_pi, approx_kl], feed_dict=inputs)
-            kl = mpi_avg(kl)
-            if kl > 1.5 * target_kl:
-                logger.log('Early stopping at step %d due to reaching max kl.'%i)
-                break
+#            kl = mpi_avg(kl)
+#            if kl > 1.5 * target_kl:
+#                logger.log('Early stopping at step %d due to reaching max kl.'%i)
+#                break
         logger.store(StopIter=i)
         for _ in range(train_v_iters):
+#        for _ in range(i + 1):
             sess.run(train_v, feed_dict=inputs)
 
         # Log changes from update
@@ -263,37 +280,49 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
     for epoch in range(epochs):
         for trail in range(trials):
             print(trail)
-            last_a = np.array(0)
-            last_r = np.array(0)
-            last_pi_rnn_state = np.zeros((1, gru_units), np.float32)
-            last_v_rnn_state = np.zeros((1, gru_units), np.float32)
             means = env.sample_tasks(1)[0]
             print('task means:', means)
             action_dict = defaultdict(int)
             env.reset_task(means)
+
+            last_a = np.array(0)
+            last_r = np.array(0)
+            last_pi_rnn_state = np.zeros((1, gru_units), np.float32)
+            last_v_rnn_state = np.zeros((1, gru_units), np.float32)
+            
             for episode in range(n):
-                a, v_t, logp_t, pi_rnn_state_t, v_rnn_state_t = sess.run(
-                        get_action_ops, feed_dict={
-                                x_ph: o.reshape(1,-1), 
-                                a_ph: last_a.reshape(-1,), 
-                                rew_ph: last_r.reshape(-1,1), 
+#                a, v_t, logp_t, pi_rnn_state_t, v_rnn_state_t = sess.run(
+#                        get_action_ops, feed_dict={
+#                                x_ph: o.reshape(1, 1, 1), 
+#                                a_ph: last_a.reshape(1, 1, 1), 
+#                                r_ph: last_r.reshape(1, 1, 1), 
+#                                pi_rnn_state_ph: last_pi_rnn_state, 
+#                                v_rnn_state_ph: last_v_rnn_state})
+                a, v_t, logp_t, pi_rnn_state_t, v_rnn_state_t, prob_t= sess.run(
+                        [pi, v, logp_pi, pi_rnn_state, v_rnn_state, prob], feed_dict={
+                                x_ph: o.reshape(1, 1, 1), 
+                                a_ph: last_a.reshape(1, 1, 1), 
+                                r_ph: last_r.reshape(1, 1, 1), 
                                 pi_rnn_state_ph: last_pi_rnn_state, 
                                 v_rnn_state_ph: last_v_rnn_state})
-                action_dict[a[0]] += 1
+                if (epoch % 10 == 0):
+                    print("Action probability distributation:", prob_t)
+                choosen_a = a[0]
+                action_dict[choosen_a] += 1
                 # save and log
-                buf.store(o, a, r, v_t, logp_t)
+                buf.store(o, choosen_a, r, v_t, logp_t)
                 logger.store(VVals=v_t)
                 o, r, d, _ = env.step(a[0])
                 ep_ret += r
                 ep_len += 1
                 
-                last_a = a[0]
+                last_a = np.array(choosen_a)
                 last_r = np.array(r)
                 last_pi_rnn_state = pi_rnn_state_t
                 last_v_rnn_state = v_rnn_state_t
     
                 terminal = d or (ep_len == max_ep_len)
-                if terminal or (t==n-1):
+                if terminal or (episode==n-1):
                     if not(terminal):
                         print('Warning: trajectory cut off by epoch at %d steps.'%ep_len)
                     # if trajectory didn't reach terminal state, bootstrap value target
@@ -337,15 +366,15 @@ if __name__ == '__main__':
     ac_kwargs=dict()
     seed = 0
     gru_units = 256
-    batch_size = 250000
+    batch_size = 500
     n = 100
-    epochs=100
+    epochs=150
     gamma=0.99
     clip_ratio=0.2
     pi_lr=3e-4
     vf_lr=1e-3
-    train_pi_iters=1000
-    train_v_iters=1000
+    train_pi_iters=100
+    train_v_iters=100
     lam=0.3
     max_ep_len=1000
     target_kl=0.01
