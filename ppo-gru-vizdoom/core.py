@@ -3,7 +3,7 @@ import tensorflow as tf
 import scipy.signal
 from gym.spaces import Box, Discrete
 from gru import GRU
-from block import WeightedNormGRUCell
+from block import WeightedNormGRUCell, dense
 
 EPS = 1e-8
 
@@ -104,7 +104,7 @@ def mlp_actor_critic(x, a, hidden_sizes=(64,64), activation=tf.tanh,
         v = tf.squeeze(mlp(x, list(hidden_sizes)+[1], activation, None), axis=1)
     return pi, logp, logp_pi, v
 
-def gru(x, a, rew, rnn_state, n_hidden, max_sequence_length, activation, output_size, seq_len):
+def gru(x, a, rew, rnn_state, n_hidden, max_sequence_length, activation, output_size, seq_len, action_encoding_matrix):
     # Determine the sequence length dynamically based on where x starts to be all zeros
 
     # First dimension is the batch size
@@ -118,6 +118,8 @@ def gru(x, a, rew, rnn_state, n_hidden, max_sequence_length, activation, output_
     seq_length_vec = tf.cast(length, tf.int32)
     # hidden = tf.concat([x, a, rew], 1)
     # hidden = tf.concat([1 * x], 1)
+    action_embedded = tf.matmul(a, action_encoding_matrix)
+    # hidden = tf.concat([x, action_embedded, rew], axis=1)
     hidden = x
 
     # use layer normalization for gru
@@ -136,30 +138,32 @@ def gru(x, a, rew, rnn_state, n_hidden, max_sequence_length, activation, output_
 
     # layer normalization for dense layer
     # norm_out = tf.contrib.layers.layer_norm(out)
-    return rnn_out, state_out
+    return rnn_out, state_out, seq_length_vec
     
-def gru_categorical_policy(x, a, rew, rnn_state, n_hidden, max_sequence_length, activation, output_size, action_space,seq_len):
+def gru_categorical_policy(x, a, rew, rnn_state, n_hidden, max_sequence_length, activation, output_size, action_space,seq_len, action_encoding_matrix):
     act_dim = action_space.n
-    rnn_out, state_out = gru(x, a, rew, rnn_state, n_hidden, max_sequence_length, activation, output_size, seq_len)
-    pi_out = tf.layers.dense(rnn_out, units=output_size,
+    rnn_out, state_out, seq_len_vec = gru(x, a, rew, rnn_state, n_hidden, max_sequence_length, activation, output_size, seq_len, action_encoding_matrix)
+    logits = tf.layers.dense(rnn_out, units=output_size,
                           kernel_initializer=tf.initializers.glorot_uniform(),
                           bias_initializer=tf.zeros_initializer())
-    # logits = tf.contrib.layers.layer_norm(pi_out)
-    logits = pi_out
+    # logits = dense(rnn_out, num_units=output_size, name='pi_out_layer')
+    # logits = tf.contrib.layers.layer_norm(logits)
+    # logits = pi_out
 
-    v_out = tf.layers.dense(rnn_out, units=1,
+    v = tf.layers.dense(rnn_out, units=1,
                           kernel_initializer=tf.initializers.glorot_uniform(),
                           bias_initializer=tf.zeros_initializer(),)
-    #v = tf.contrib.layers.layer_norm(v_out)
-    v = v_out
+    # v = dense(rnn_out, num_units=1, name='v_out_layer')
+    # v = tf.contrib.layers.layer_norm(v)
+    # v = v_out
 
     logp_all = tf.nn.log_softmax(logits)
     pi = tf.squeeze(tf.multinomial(logits,1), axis=1)
     logp = tf.reduce_sum(a * logp_all, axis=1)
     logp_pi = tf.reduce_sum(tf.one_hot(pi, depth=act_dim) * logp_all, axis=1)
-    return pi, v, logp, logp_pi, state_out, logits
+    return pi, v, logp, logp_pi, state_out, logits, seq_len_vec
 
-def gru_actor_critic(x, a, rew, pi_rnn_state, n_hidden, max_sequence_length, seq_len, activation=tf.nn.relu,
+def gru_actor_critic(x, a, rew, rnn_state, n_hidden, max_sequence_length, action_encoding_matrix, seq_len, activation=tf.nn.relu,
                      output_activation=None, policy=None, action_space=None):
     # only consider discrete experiment now
     if policy is None and isinstance(action_space, Discrete):
@@ -168,14 +172,14 @@ def gru_actor_critic(x, a, rew, pi_rnn_state, n_hidden, max_sequence_length, seq
     a = tf.one_hot(a, depth=act_dim)
 
     with tf.variable_scope('pi-v'):
-        pi, v, logp, logp_pi, rnn_state, logits = policy(x, a, rew,
-                                                     pi_rnn_state, n_hidden,
-                                                     max_sequence_length, activation, act_dim,
-                                                     action_space, seq_len)
+        pi, v, logp, logp_pi, rnn_state, logits, seq_len_vector = policy(x, a, rew,
+                                                         rnn_state, n_hidden,
+                                                         max_sequence_length, activation, act_dim,
+                                                         action_space, seq_len, action_encoding_matrix)
     # with tf.variable_scope('v'):
     #     v, new_v_rnn_state = gru(x, a, rew, v_rnn_state, n_hidden, max_sequence_length, activation, 1, seq_len)
     #     v = tf.squeeze(v, axis=1)
-    return pi, logp, logp_pi, v, rnn_state, logits
+    return pi, logp, logp_pi, v, rnn_state, logits, seq_len_vector
 
 def denseblock(x, a, rew, dilation_rate, num_filter, action_space):
     act_dim = action_space.n
