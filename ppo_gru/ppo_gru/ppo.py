@@ -251,6 +251,12 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
         inputs[r_ph] = inputs[r_ph].reshape(-1, n, 1)
         inputs[pi_rnn_state_ph] = np.zeros((trials, gru_units), np.float32)
         inputs[v_rnn_state_ph] = np.zeros((trials, gru_units), np.float32)
+#        print('x:', inputs[x_ph])
+#        print('a:', inputs[a_ph])
+#        print('r:', inputs[r_ph])
+#        print('ret:', inputs[ret_ph])
+#        print('adv:', inputs[adv_ph])
+#        print('logp_old:', inputs[logp_old_ph])
         pi_l_old, v_l_old, ent = sess.run([pi_loss, v_loss, approx_ent], feed_dict=inputs)
         
         # Training
@@ -309,10 +315,10 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
                     print("Action probability distributation:", prob_t)
                 choosen_a = a[0]
                 action_dict[choosen_a] += 1
+                o, r, d, _ = env.step(a[0])  
                 # save and log
                 buf.store(o, choosen_a, r, v_t, logp_t)
                 logger.store(VVals=v_t)
-                o, r, d, _ = env.step(a[0])
                 ep_ret += r
                 ep_len += 1
                 
@@ -366,7 +372,7 @@ if __name__ == '__main__':
     ac_kwargs=dict()
     seed = 0
     gru_units = 256
-    batch_size = 500
+    batch_size = 250000
     n = 100
     epochs=150
     gamma=0.99

@@ -153,7 +153,7 @@ def gru_categorical_policy(x, a, rew, rnn_state, gru_units, activation, output_s
     logp_pi = tf.reduce_sum(tf.one_hot(pi, depth=act_dim) * logp_all, axis=1)
     print("shape of logp_pi", logp_pi.shape)
 #    return pi, logp, logp_pi, state_out
-    return pi, logp, logp_pi, state_out, tf.exp(logp_all)
+    return pi, logp, logp_pi, state_out, logits
 
 def gru_actor_critic(x, a, rew, pi_rnn_state, v_rnn_state, gru_units, activation=tf.nn.relu, 
                      output_activation=None, policy=None, action_space=None):

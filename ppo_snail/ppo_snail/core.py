@@ -8,7 +8,7 @@ import math
 
 EPS = 1e-8
 
-n = 10
+n = 100
 MASK = np.array([[-float('inf') if i>j else 1 for i in range(n)] for j in range(n)])
 
 
@@ -194,12 +194,13 @@ def snail_bandit(a, rew, seq_length, action_space):
     rew = tf.expand_dims(rew, -1)
     # inputs shape: batch_size * sequence_length * input_dimensionality
     inputs = tf.concat([rew, a], 2)
-    print("shape of inputs:", inputs)
+    print("shape of inputs:", inputs.shape)
     input_layer = tf.layers.dense(inputs, units=32, 
                           kernel_initializer=tf.initializers.glorot_normal(), 
                           bias_initializer=tf.zeros_initializer(),)
     print("shape of input_layer:", input_layer.shape)
     with tf.variable_scope('pi'):
+        # num of filters = 32
         policy_net = tcb_lock(input_layer, seq_length, 32)
         policy_net = tcb_lock(policy_net, seq_length, 32)
         # key_size = 32 and value_size = 32
@@ -211,12 +212,12 @@ def snail_bandit(a, rew, seq_length, action_space):
         print("shaple of logits after reshape:", logits.shape)
         logp_all = tf.nn.log_softmax(logits)
         print("shaple of logp_all:", logp_all.shape)
-        pi = tf.multinomial(logits, 1)
+        pi = tf.squeeze(tf.multinomial(logits, 1), axis=1)
         print("shaple of pi:", pi.shape)
         logp = tf.reduce_sum(tf.reshape(a, [-1, act_dim]) * logp_all, axis=1)
         print("shaple of logp:", logp.shape)
         print("shape of one hot pi:", tf.one_hot(pi, depth=act_dim).shape)
-        logp_pi = tf.reduce_sum(tf.squeeze(tf.one_hot(pi, depth=act_dim), axis=1) * logp_all, axis=1)
+        logp_pi = tf.reduce_sum(tf.one_hot(pi, depth=act_dim) * logp_all, axis=1)
         print("shaple of logp_pi:", logp_pi.shape)
 
     with tf.variable_scope('v'):

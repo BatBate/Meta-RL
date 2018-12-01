@@ -21,11 +21,11 @@ class PPOBuffer:
     def __init__(self, act_dim, size, gamma=0.99, lam=0.95):
         # self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
         self.act_buf = np.zeros(size, dtype=np.float32)
-        self.adv_buf = np.zeros(size, dtype=np.float32)
         self.rew_buf = np.zeros(size, dtype=np.float32)
-        self.ret_buf = np.zeros(size, dtype=np.float32)
         self.val_buf = np.zeros(size, dtype=np.float32)
         self.logp_buf = np.zeros(size, dtype=np.float32)
+        self.adv_buf = np.zeros(size, dtype=np.float32)
+        self.ret_buf = np.zeros(size, dtype=np.float32)
         self.gamma, self.lam = gamma, lam
         self.ptr, self.path_start_idx, self.max_size = 0, 0, size
 
@@ -243,18 +243,15 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 #        inputs[rew_ph] = np.tril(np.transpose(np.repeat(inputs[rew_ph], n).reshape(trials, n, n), [0, 2, 1]))
         inputs[a_ph] = inputs[a_ph].reshape(trials, n)
         inputs[rew_ph] = inputs[rew_ph].reshape(trials, n)
-#        inputs[adv_ph] = inputs[adv_ph].reshape(trials, n)
-#        inputs[ret_ph] = inputs[ret_ph].reshape(trials, n)
-#        inputs[logp_old_ph] = inputs[logp_old_ph].reshape(trials, n)
         pi_l_old, v_l_old, ent = sess.run([pi_loss, v_loss, approx_ent], feed_dict=inputs)
         
         # Training
         for i in range(train_pi_iters):
             _, kl = sess.run([train_pi, approx_kl], feed_dict=inputs)
-            kl = mpi_avg(kl)
-            if kl > 1.5 * target_kl:
-                logger.log('Early stopping at step %d due to reaching max kl.'%i)
-                break
+#            kl = mpi_avg(kl)
+#            if kl > 1.5 * target_kl:
+#                logger.log('Early stopping at step %d due to reaching max kl.'%i)
+#                break
         logger.store(StopIter=i)
         for _ in range(train_v_iters):
             sess.run(train_v, feed_dict=inputs)
@@ -293,14 +290,14 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 #                choosen_a = a[episode, 0]
 #                choosen_v_t = v_t[0, episode]
 #                choosen_logp_t = logp_t[episode]
-                choosen_a = a[-1, 0]
+                choosen_a = a[-1]
                 choosen_v_t = v_t[-1]
                 choosen_logp_t = logp_t[-1]
                 action_dict[choosen_a] += 1
+                o, r, d, _ = env.step(choosen_a)
                 # save and log
                 buf.store(choosen_a, r, choosen_v_t, choosen_logp_t)
                 logger.store(VVals=v_t)
-                o, r, d, _ = env.step(choosen_a)
                 ep_ret += r
                 ep_len += 1
                 
@@ -317,7 +314,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                     if terminal:
                         # only save EpRet / EpLen if trajectory finished
                         logger.store(EpRet=ep_ret, EpLen=ep_len)
-                    o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+#                    o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
             print(action_dict)
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs-1):
@@ -351,15 +348,15 @@ if __name__ == '__main__':
     actor_critic = core.snail_actor_critic
     ac_kwargs=dict()
     seed = 0
-    batch_size = 100
-    n = 10
+    batch_size = 250000
+    n = 100
     epochs=100
     gamma=0.99
     clip_ratio=0.2
     pi_lr=3e-4
     vf_lr=1e-3
-    train_pi_iters=1000
-    train_v_iters=1000
+    train_pi_iters=100
+    train_v_iters=100
     lam=0.3
     max_ep_len=1000
     target_kl=0.01
