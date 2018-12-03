@@ -11,7 +11,7 @@ from collections import defaultdict
 from vizdoombasic import VizdoomBasic
 from vizdoommywayhome import VizdoomMyWayHome
 import tensorflow.contrib.slim as slim
-
+from datetime import datetime
 
 class PPOBuffer:
     """
@@ -308,8 +308,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
 
 
     def update():
+        print(f'Start updating at {datetime.now()}')
         inputs = {k:v for k,v in zip(all_phs, buf.get())}
-
 
         inputs[rnn_state_ph] = np.zeros((trials_per_epoch, gru_units), np.float32)
         # inputs[v_rnn_state_ph] = np.zeros((trials_per_epoch, gru_units), np.float32)
@@ -338,8 +338,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
         #print(sess.run(ret_ph, feed_dict=inputs))
 
         for i in range(train_pi_iters):
-            _, kl, pi_loss_i, v_loss_i = sess.run([train_pi, approx_kl, pi_loss, v_loss], feed_dict=inputs)
-            print(f'i: {i}, pi_loss: {pi_loss_i}, v_loss: {v_loss_i}')
+            _, kl, pi_loss_i, v_loss_i, ent = sess.run([train_pi, approx_kl, pi_loss, v_loss, approx_ent], feed_dict=inputs)
+            print(f'i: {i}, pi_loss: {pi_loss_i}, v_loss: {v_loss_i}, entropy: {ent}')
 
             # kl = mpi_avg(kl)
             # if kl > 1.5 * target_kl:
@@ -358,6 +358,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
                      KL=kl, Entropy=ent, ClipFrac=cf,
                      DeltaLossPi=(pi_l_new - pi_l_old),
                      DeltaLossV=(v_l_new - v_l_old))
+        print(f'Updating finished at {datetime.now()}')
+
 
     start_time = time.time()
     o, r, d, ep_ret, ep_len = env.reset(), np.zeros(1), False, 0, 0
@@ -381,7 +383,6 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
             # TODO: tweek settings to match the paper
 
             # TODO: find a way to generate mazes
-            print(trial)
             last_a = np.array(0)
             last_r = np.array(r)
             last_rnn_state = np.zeros((1, gru_units), np.float32)
@@ -395,6 +396,11 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
                 o_rescaled = recenter_rgb(sess.run(rescale_image_op, feed_dict={raw_input_ph: o}))
 
                 action_dict = defaultdict(int)
+
+                # dirty hard coding to make it print in order
+                action_dict[0] = 0
+                action_dict[1] = 0
+                action_dict[2] = 0
 
                 for step in range(max_ep_len):
                     a, v_t, logp_t, rnn_state_t, logits_t = sess.run(
@@ -448,7 +454,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
                     # o_expanded = np.expand_dims(o, 0)
                     # x_t = sess.run(x_ph, feed_dict={raw_input: o_expanded})
                 print(action_dict)
-            print(f'step_counter: {step_counter}')
+            # print(f'step_counter: {step_counter}')
             if step_counter < episodes_per_trial * max_ep_len:
                 buf.pad_zeros(episodes_per_trial * max_ep_len - step_counter)
             buf.seq_len_buf[trial] = step_counter
