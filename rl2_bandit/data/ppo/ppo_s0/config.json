@@ -1,0 +1,40 @@
+{
+    "ac_kwargs":	{},
+    "actor_critic":	"gru_actor_critic",
+    "batch_size":	1000,
+    "clip_ratio":	0.2,
+    "env_fn":	"<function <lambda> at 0x000002799B308BF8>",
+    "epochs":	100,
+    "exp_name":	"ppo",
+    "gamma":	0.99,
+    "gru_units":	256,
+    "lam":	0.3,
+    "logger":	{
+        "<logx.EpochLogger object at 0x00000279A6A28438>":	{
+            "epoch_dict":	{},
+            "exp_name":	"ppo",
+            "first_row":	true,
+            "log_current_row":	{},
+            "log_headers":	[],
+            "output_dir":	"D:\\git\\RL\\ppo_gru\\data\\ppo\\ppo_s0",
+            "output_file":	{
+                "<_io.TextIOWrapper name='D:\\\\git\\\\RL\\\\ppo_gru\\\\data\\\\ppo\\\\ppo_s0\\\\progress.txt' mode='w' encoding='cp936'>":	{
+                    "mode":	"w"
+                }
+            }
+        }
+    },
+    "logger_kwargs":	{
+        "exp_name":	"ppo",
+        "output_dir":	"D:\\git\\RL\\ppo_gru\\data\\ppo\\ppo_s0"
+    },
+    "max_ep_len":	1000,
+    "n":	100,
+    "pi_lr":	0.0003,
+    "save_freq":	10,
+    "seed":	0,
+    "target_kl":	0.01,
+    "train_pi_iters":	100,
+    "train_v_iters":	100,
+    "vf_lr":	0.001
+}
