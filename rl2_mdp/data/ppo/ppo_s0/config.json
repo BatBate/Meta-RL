@@ -1,16 +1,16 @@
 {
     "ac_kwargs":	{},
     "actor_critic":	"gru_actor_critic",
-    "batch_size":	250000,
+    "batch_size":	25000,
     "clip_ratio":	0.2,
-    "env_fn":	"<function <lambda> at 0x000001B0D9607D08>",
-    "epochs":	100,
+    "env_fn":	"<function <lambda> at 0x000001DC6D601EA0>",
+    "epochs":	150,
     "exp_name":	"ppo",
     "gamma":	0.99,
     "gru_units":	256,
     "lam":	0.3,
     "logger":	{
-        "<logx.EpochLogger object at 0x000001AF3AD03EF0>":	{
+        "<logx.EpochLogger object at 0x000001DC3C13E898>":	{
             "epoch_dict":	{},
             "exp_name":	"ppo",
             "first_row":	true,
@@ -29,7 +29,7 @@
         "output_dir":	"D:\\git\\RL\\rl2_mdp\\data\\ppo\\ppo_s0"
     },
     "max_ep_len":	10,
-    "n":	10,
+    "n":	100,
     "pi_lr":	0.0003,
     "save_freq":	10,
     "seed":	0,

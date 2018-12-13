@@ -1,23 +1,23 @@
 {
     "ac_kwargs":	{},
     "actor_critic":	"snail_actor_critic",
-    "batch_size":	500,
+    "batch_size":	25000,
     "clip_ratio":	0.2,
-    "env_fn":	"<function <lambda> at 0x00000277B938BAE8>",
-    "epochs":	100,
+    "env_fn":	"<function <lambda> at 0x0000016117837598>",
+    "epochs":	300,
     "exp_name":	"ppo",
     "gamma":	0.99,
     "lam":	0.3,
     "logger":	{
-        "<logx.EpochLogger object at 0x000002799B2FEC88>":	{
+        "<logx.EpochLogger object at 0x0000016117831D68>":	{
             "epoch_dict":	{},
             "exp_name":	"ppo",
             "first_row":	true,
             "log_current_row":	{},
             "log_headers":	[],
-            "output_dir":	"D:\\git\\RL\\ppo_snail\\data\\ppo\\ppo_s0",
+            "output_dir":	"D:\\git\\RL\\snail_bandit\\data\\ppo\\ppo_s0",
             "output_file":	{
-                "<_io.TextIOWrapper name='D:\\\\git\\\\RL\\\\ppo_snail\\\\data\\\\ppo\\\\ppo_s0\\\\progress.txt' mode='w' encoding='cp936'>":	{
+                "<_io.TextIOWrapper name='D:\\\\git\\\\RL\\\\snail_bandit\\\\data\\\\ppo\\\\ppo_s0\\\\progress.txt' mode='w' encoding='cp936'>":	{
                     "mode":	"w"
                 }
             }
@@ -25,15 +25,15 @@
     },
     "logger_kwargs":	{
         "exp_name":	"ppo",
-        "output_dir":	"D:\\git\\RL\\ppo_snail\\data\\ppo\\ppo_s0"
+        "output_dir":	"D:\\git\\RL\\snail_bandit\\data\\ppo\\ppo_s0"
     },
     "max_ep_len":	1000,
-    "n":	10,
+    "n":	100,
     "pi_lr":	0.0003,
     "save_freq":	10,
     "seed":	0,
     "target_kl":	0.01,
-    "train_pi_iters":	100,
+    "train_pi_iters":	1000,
     "train_v_iters":	100,
     "vf_lr":	0.001
 }

@@ -246,16 +246,29 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     sess.run(sync_all_params())
 
     # Setup model saving
-#    logger.setup_tf_saver(sess, inputs={'x': x_ph}, outputs={'pi': pi, 'v': v})
+    model_inputs = {'x': x_ph, 't': t_ph, 'a': a_ph, 'r': r_ph}
+    model_outputs = {'pi': pi}
+    logger.setup_tf_saver(sess, inputs=model_inputs, outputs=model_outputs)
 
     def update():
         inputs = {k:v for k,v in zip(all_phs, buf.get())}
 #        inputs[a_ph] = np.tril(np.transpose(np.repeat(inputs[a_ph], n).reshape(trials, n, n), [0, 2, 1]))
 #        inputs[rew_ph] = np.tril(np.transpose(np.repeat(inputs[rew_ph], n).reshape(trials, n, n), [0, 2, 1]))
+#        print(inputs[x_ph])
+#        print(inputs[t_ph])
+#        print(inputs[a_ph])
+#        print(inputs[r_ph])
         inputs[x_ph] = inputs[x_ph].reshape(trials, sequence_length)
         inputs[t_ph] = inputs[t_ph].reshape(trials, sequence_length)
         inputs[a_ph] = inputs[a_ph].reshape(trials, sequence_length)
         inputs[r_ph] = inputs[r_ph].reshape(trials, sequence_length)
+#        print('x:', inputs[x_ph])
+#        print('t:', inputs[t_ph])
+#        print('a:', inputs[a_ph])
+#        print('r:', inputs[r_ph])
+#        print('ret:', inputs[ret_ph])
+#        print('adv:', inputs[adv_ph])
+#        print('logp_old:', inputs[logp_old_ph])
         pi_l_old, v_l_old, ent = sess.run([pi_loss, v_loss, approx_ent], feed_dict=inputs)
         
         # Training
@@ -278,7 +291,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                      DeltaLossV=(v_l_new - v_l_old))
 
     start_time = time.time()
-
+    save_itr = 0
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         for trail in range(trials):
@@ -297,11 +310,16 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             o, r, d, ep_ret, ep_len = env.reset(), np.zeros(1), False, 0, 0
             
             for episode in range(sequence_length):
+#                print('episode:', episode)
+#                print('o:', o_deque)
+#                print('d:', t_deque)
+#                print('a:', last_a)
+#                print('r:', last_r)
                 a, v_t, logp_t = sess.run(
                         get_action_ops, feed_dict={
                                 x_ph: np.array(o_deque).reshape(1, sequence_length), 
                                 t_ph: np.array(t_deque).reshape(1, sequence_length), 
-                                a_ph: np.array(last_a).reshape(1, sequence_length), 
+                                a_ph: np.array(last_a).reshape(1, sequence_length),
                                 r_ph: np.array(last_r).reshape(1, sequence_length)})
 #                print("a shape:", a.shape)
 #                print("v_t shape:", v_t.shape)
@@ -331,7 +349,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                 logger.store(VVals=v_t)
                 
                 terminal = d or t
-                if terminal:
+                if terminal or (episode == sequence_length - 1):
                     if not(terminal):
                         print('Warning: trajectory cut off by epoch at %d steps.'%ep_len)
                     # if trajectory didn't reach terminal state, bootstrap value target
@@ -357,7 +375,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             print('average reward:', total_reward / sequence_length)
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs-1):
-            logger.save_state({'env': env}, None)
+            logger.save_state({'env': env}, save_itr)
+            save_itr += 1
         # Perform PPO update!
         update()
 
@@ -388,7 +407,7 @@ if __name__ == '__main__':
     actor_critic = core.snail_actor_critic
     ac_kwargs=dict()
     seed = 0
-    batch_size = 1000
+    batch_size = 250000
     n = 10
     epochs=100
     gamma=0.99

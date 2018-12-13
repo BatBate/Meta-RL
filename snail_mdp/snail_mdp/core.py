@@ -212,20 +212,20 @@ def snail_bandit(x, t, a, r, seq_length, act_dim, obs_dim):
         pi_key_size = 32
         pi_value_size = 32
         policy_net = attention_block(policy_net, pi_key_size, pi_value_size)
-        print("shaple of policy_net:", policy_net.shape)
+        print("shape of policy_net:", policy_net.shape)
         logits = tf.layers.dense(policy_net, act_dim)
-        print("shaple of logits:", logits.shape)
+        print("shape of logits:", logits.shape)
         logits = tf.reshape(logits,[-1, act_dim])
-        print("shaple of logits after reshape:", logits.shape)
+        print("shape of logits after reshape:", logits.shape)
         logp_all = tf.nn.log_softmax(logits)
-        print("shaple of logp_all:", logp_all.shape)
+        print("shape of logp_all:", logp_all.shape)
         pi = tf.squeeze(tf.multinomial(logits, 1), axis=1)
         print("shaple of pi:", pi.shape)
         logp = tf.reduce_sum(tf.reshape(a, [-1, act_dim]) * logp_all, axis=1)
         print("shaple of logp:", logp.shape)
         print("shape of one hot pi:", tf.one_hot(pi, depth=act_dim).shape)
         logp_pi = tf.reduce_sum(tf.one_hot(pi, depth=act_dim) * logp_all, axis=1)
-        print("shaple of logp_pi:", logp_pi.shape)
+        print("shape of logp_pi:", logp_pi.shape)
 
     with tf.variable_scope('v'):
         v_num_filter = 16

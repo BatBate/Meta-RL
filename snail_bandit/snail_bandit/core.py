@@ -8,7 +8,7 @@ import math
 
 EPS = 1e-8
 
-n = 10
+n = 100
 MASK = np.array([[-float('inf') if i>j else 1 for i in range(n)] for j in range(n)])
 
 

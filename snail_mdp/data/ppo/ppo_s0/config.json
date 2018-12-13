@@ -1,23 +1,23 @@
 {
     "ac_kwargs":	{},
     "actor_critic":	"snail_actor_critic",
-    "batch_size":	1000,
+    "batch_size":	25000,
     "clip_ratio":	0.2,
-    "env_fn":	"<function <lambda> at 0x000001B0D9555D08>",
-    "epochs":	100,
+    "env_fn":	"<function <lambda> at 0x7efe6cfb7ea0>",
+    "epochs":	150,
     "exp_name":	"ppo",
     "gamma":	0.99,
     "lam":	0.3,
     "logger":	{
-        "<logx.EpochLogger object at 0x000001B0F0F55518>":	{
+        "<logx.EpochLogger object at 0x7efe6cfbd048>":	{
             "epoch_dict":	{},
             "exp_name":	"ppo",
             "first_row":	true,
             "log_current_row":	{},
             "log_headers":	[],
-            "output_dir":	"D:\\git\\RL\\snail_mdp\\data\\ppo\\ppo_s0",
+            "output_dir":	"/h/172/lizeqi/mdp/snail_100/snail_mdp/data/ppo/ppo_s0",
             "output_file":	{
-                "<_io.TextIOWrapper name='D:\\\\git\\\\RL\\\\snail_mdp\\\\data\\\\ppo\\\\ppo_s0\\\\progress.txt' mode='w' encoding='cp936'>":	{
+                "<_io.TextIOWrapper name='/h/172/lizeqi/mdp/snail_100/snail_mdp/data/ppo/ppo_s0/progress.txt' mode='w' encoding='UTF-8'>":	{
                     "mode":	"w"
                 }
             }
@@ -25,10 +25,10 @@
     },
     "logger_kwargs":	{
         "exp_name":	"ppo",
-        "output_dir":	"D:\\git\\RL\\snail_mdp\\data\\ppo\\ppo_s0"
+        "output_dir":	"/h/172/lizeqi/mdp/snail_100/snail_mdp/data/ppo/ppo_s0"
     },
     "max_ep_len":	10,
-    "n":	10,
+    "n":	100,
     "pi_lr":	0.0003,
     "save_freq":	10,
     "seed":	0,

@@ -58,7 +58,7 @@ class TabularMDPEnv(gym.Env):
         observation = np.zeros(self.num_states, dtype=np.float32)
         observation[self._state] = 1.0
 
-        return np.array(self._state)
+        return self._state
 
     def step(self, action):
         assert self.action_space.contains(action)
@@ -70,4 +70,4 @@ class TabularMDPEnv(gym.Env):
         observation = np.zeros(self.num_states, dtype=np.float32)
         observation[self._state] = 1.0
 
-        return np.array(self._state), reward, False, self._task
+        return self._state, reward, False, self._task

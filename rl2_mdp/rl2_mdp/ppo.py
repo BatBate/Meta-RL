@@ -6,7 +6,6 @@ import core
 from logx import EpochLogger
 from mpi_tf import MpiAdamOptimizer, sync_all_params
 from mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
-from bandit import BernoulliBanditEnv, GaussianBanditEnv
 from mdp import TabularMDPEnv
 from collections import defaultdict
 
@@ -249,7 +248,9 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
     sess.run(sync_all_params())
 
     # Setup model saving
-    logger.setup_tf_saver(sess, inputs={'x': x_ph}, outputs={'pi': pi, 'v': v})
+    model_inputs = {'x': x_ph, 't': t_ph, 'a': a_ph, 'r': r_ph, 'pi_rnn_state_in': pi_rnn_state_ph, 'v_rnn_state_in': v_rnn_state_ph}
+    model_outputs = {'pi': pi, 'pi_rnn_state_out': pi_rnn_state, 'v_rnn_state_out': v_rnn_state}
+    logger.setup_tf_saver(sess, inputs=model_inputs, outputs=model_outputs)
 
     def update():
         inputs = {k:v for k,v in zip(all_phs, buf.get())}
@@ -257,6 +258,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
 #        print(inputs[t_ph][:13])
 #        print(inputs[a_ph][:13])
 #        print(inputs[r_ph][:13])
+#        print(inputs[adv_ph][:13])
+#        print(inputs[ret_ph][:13])
         inputs[x_ph] = inputs[x_ph].reshape(-1, sequence_length, 1)
         inputs[t_ph] = inputs[t_ph].reshape(-1, sequence_length, 1)
         inputs[a_ph] = inputs[a_ph].reshape(-1, sequence_length, 1)
@@ -281,7 +284,6 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
 #                break
         logger.store(StopIter=i)
         for _ in range(train_v_iters):
-#        for _ in range(i + 1):
             sess.run(train_v, feed_dict=inputs)
 
         # Log changes from update
@@ -293,7 +295,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
                      DeltaLossV=(v_l_new - v_l_old))
 
     start_time = time.time()
-
+    save_itr = 0
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         for trail in range(trials):
@@ -353,7 +355,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
                 logger.store(VVals=v_t)
                 
                 terminal = d or t
-                if terminal:
+                if terminal or (episode == sequence_length - 1):
                     if not(terminal):
                         print('Warning: trajectory cut off by epoch at %d steps.'%ep_len)
                     # if trajectory didn't reach terminal state, bootstrap value target
@@ -379,7 +381,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
             print('average reward:', total_reward / sequence_length)
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs-1):
-            logger.save_state({'env': env}, None)
+            logger.save_state({'env': env}, save_itr)
+            save_itr += 1
         # Perform PPO update!
         update()
 
@@ -411,9 +414,9 @@ if __name__ == '__main__':
     ac_kwargs=dict()
     seed = 0
     gru_units = 256
-    batch_size = 250000
-    n = 10
-    epochs=100
+    batch_size = 25000
+    n = 100
+    epochs=150
     gamma=0.99
     clip_ratio=0.2
     pi_lr=3e-4

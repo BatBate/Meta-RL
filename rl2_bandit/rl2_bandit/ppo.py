@@ -243,7 +243,9 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
     sess.run(sync_all_params())
 
     # Setup model saving
-    logger.setup_tf_saver(sess, inputs={'x': x_ph}, outputs={'pi': pi, 'v': v})
+    model_inputs = {'x': x_ph, 'a': a_ph, 'r': r_ph, 'pi_rnn_state_in': pi_rnn_state_ph, 'v_rnn_state_in': v_rnn_state_ph}
+    model_outputs = {'pi': pi, 'pi_rnn_state_out': pi_rnn_state, 'v_rnn_state_out': v_rnn_state}
+    logger.setup_tf_saver(sess, inputs=model_inputs, outputs=model_outputs)
 
     def update():
         inputs = {k:v for k,v in zip(all_phs, buf.get())}
@@ -282,7 +284,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
 
     start_time = time.time()
     o, r, d, ep_ret, ep_len = env.reset(), np.zeros(1), False, 0, 0
-
+    save_itr = 0
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         for trail in range(trials):
@@ -342,7 +344,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, gr
             print(action_dict)
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs-1):
-            logger.save_state({'env': env}, None)
+            logger.save_state({'env': env}, save_itr)
+            save_itr += 1
         # Perform PPO update!
         update()
 
@@ -373,9 +376,9 @@ if __name__ == '__main__':
     ac_kwargs=dict()
     seed = 0
     gru_units = 256
-    batch_size = 1000
+    batch_size = 250000
     n = 100
-    epochs=100
+    epochs=150
     gamma=0.99
     clip_ratio=0.2
     pi_lr=3e-4

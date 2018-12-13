@@ -235,7 +235,9 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     sess.run(sync_all_params())
 
     # Setup model saving
-#    logger.setup_tf_saver(sess, inputs={'x': x_ph}, outputs={'pi': pi, 'v': v})
+    model_inputs = {'a': a_ph, 'r': rew_ph}
+    model_outputs = {'pi': pi}
+    logger.setup_tf_saver(sess, inputs=model_inputs, outputs=model_outputs)
 
     def update():
         inputs = {k:v for k,v in zip(all_phs, buf.get())}
@@ -248,10 +250,10 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         # Training
         for i in range(train_pi_iters):
             _, kl = sess.run([train_pi, approx_kl], feed_dict=inputs)
-#            kl = mpi_avg(kl)
-#            if kl > 1.5 * target_kl:
-#                logger.log('Early stopping at step %d due to reaching max kl.'%i)
-#                break
+            kl = mpi_avg(kl)
+            if kl > 1.5 * target_kl:
+                logger.log('Early stopping at step %d due to reaching max kl.'%i)
+                break
         logger.store(StopIter=i)
         for _ in range(train_v_iters):
             sess.run(train_v, feed_dict=inputs)
@@ -266,7 +268,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     start_time = time.time()
     o, r, d, ep_ret, ep_len = env.reset(), np.zeros(1), False, 0, 0
-
+    save_itr = 0
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         for trail in range(trials):
@@ -290,7 +292,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 #                choosen_a = a[episode, 0]
 #                choosen_v_t = v_t[0, episode]
 #                choosen_logp_t = logp_t[episode]
-                print('a:', a)
+#                print('a:', a)
                 choosen_a = a[-1]
                 choosen_v_t = v_t[-1]
                 choosen_logp_t = logp_t[-1]
@@ -319,7 +321,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             print(action_dict)
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs-1):
-            logger.save_state({'env': env}, None)
+            logger.save_state({'env': env}, save_itr)
+            save_itr += 1
         # Perform PPO update!
         update()
 
@@ -343,20 +346,20 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 if __name__ == '__main__':
     tf.reset_default_graph()
     exp_name = 'ppo'
-    num_arms = 5
-    env = GaussianBanditEnv
+    num_arms = 10
+    env = BernoulliBanditEnv
     env_fn = env(num_arms)
     actor_critic = core.snail_actor_critic
     ac_kwargs=dict()
     seed = 0
-    batch_size = 500
-    n = 10
-    epochs=100
+    batch_size = 25000
+    n = 100
+    epochs=300
     gamma=0.99
     clip_ratio=0.2
     pi_lr=3e-4
     vf_lr=1e-3
-    train_pi_iters=100
+    train_pi_iters=1000
     train_v_iters=100
     lam=0.3
     max_ep_len=1000
