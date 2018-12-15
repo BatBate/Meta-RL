@@ -346,15 +346,15 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 if __name__ == '__main__':
     tf.reset_default_graph()
     exp_name = 'ppo'
-    num_arms = 10
+    num_arms = 5
     env = BernoulliBanditEnv
     env_fn = env(num_arms)
     actor_critic = core.snail_actor_critic
     ac_kwargs=dict()
     seed = 0
-    batch_size = 25000
-    n = 100
-    epochs=300
+    batch_size = 1000
+    n = 10
+    epochs=1000
     gamma=0.99
     clip_ratio=0.2
     pi_lr=3e-4

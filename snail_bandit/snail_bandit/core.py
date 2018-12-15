@@ -8,7 +8,7 @@ import math
 
 EPS = 1e-8
 
-n = 100
+n = 10
 MASK = np.array([[-float('inf') if i>j else 1 for i in range(n)] for j in range(n)])
 
 
@@ -159,8 +159,14 @@ def dense_block(inputs, dilation_rate, num_filter):
     kernel_size = 2
 #    xf = CausalConv1D(inputs, num_filter, kernel_size, dilation_rate=dilation_rate)
 #    xg = CausalConv1D(inputs, num_filter, kernel_size, dilation_rate=dilation_rate)
-    xf = tf.keras.layers.Conv1D(num_filter, kernel_size, padding="causal", dilation_rate=dilation_rate)(inputs)
-    xg = tf.keras.layers.Conv1D(num_filter, kernel_size, padding="causal", dilation_rate=dilation_rate)(inputs)
+    xf = tf.keras.layers.Conv1D(num_filter, kernel_size, padding="causal", 
+                                dilation_rate=dilation_rate, 
+                                kernel_initializer=tf.initializers.glorot_normal(), 
+                                bias_initializer=tf.zeros_initializer())(inputs)
+    xg = tf.keras.layers.Conv1D(num_filter, kernel_size, padding="causal", 
+                                dilation_rate=dilation_rate, 
+                                kernel_initializer=tf.initializers.glorot_normal(), 
+                                bias_initializer=tf.zeros_initializer())(inputs)
     activations = tf.multiply(tf.nn.tanh(xf), tf.nn.sigmoid(xg))
     return tf.concat([inputs, activations], 2)
 
@@ -170,8 +176,12 @@ def tcb_lock(inputs, seq_length, num_filter):
     return inputs
         
 def attention_block(inputs, key_size, value_size):
-    keys = tf.layers.dense(inputs, key_size)
-    query = tf.layers.dense(inputs, key_size)
+    keys = tf.layers.dense(inputs, key_size, 
+                           kernel_initializer=tf.initializers.glorot_normal(), 
+                           bias_initializer=tf.zeros_initializer())
+    query = tf.layers.dense(inputs, key_size, 
+                            kernel_initializer=tf.initializers.glorot_normal(), 
+                            bias_initializer=tf.zeros_initializer())
     print("shape of query:", query.shape)
     logits = tf.matmul(query, tf.transpose(keys, perm=[0, 2, 1]))
     print("shape of logits:", logits.shape)
@@ -184,7 +194,9 @@ def attention_block(inputs, key_size, value_size):
     print("shape of mask_logits:", mask_logits.shape)
 #    mask_logits = tf.keras.layers.Masking(mask_value=0)(logits)
     probs = tf.nn.softmax(mask_logits / math.sqrt(key_size))
-    values = tf.layers.dense(inputs, value_size)
+    values = tf.layers.dense(inputs, value_size, 
+                             kernel_initializer=tf.initializers.glorot_normal(), 
+                             bias_initializer=tf.zeros_initializer())
     read = tf.matmul(probs, values)
     return tf.concat([inputs, read], 2)
 
@@ -207,7 +219,9 @@ def snail_bandit(a, rew, seq_length, action_space):
         pi_value_size = 32
         policy_net = attention_block(policy_net, pi_key_size, pi_value_size)
         print("shaple of policy_net:", policy_net.shape)
-        logits = tf.layers.dense(policy_net, act_dim)
+        logits = tf.layers.dense(policy_net, act_dim, 
+                                 kernel_initializer=tf.initializers.glorot_normal(), 
+                                 bias_initializer=tf.zeros_initializer())
         print("shaple of logits:", logits.shape)
         logits = tf.reshape(logits,[-1, act_dim])
         print("shaple of logits after reshape:", logits.shape)
@@ -228,7 +242,9 @@ def snail_bandit(a, rew, seq_length, action_space):
         v_key_size = 16
         v_value_size = 16
         value_net = attention_block(value_net, v_key_size, v_value_size)
-        v = tf.layers.dense(value_net, 1)
+        v = tf.layers.dense(value_net, 1, 
+                            kernel_initializer=tf.initializers.glorot_normal(), 
+                            bias_initializer=tf.zeros_initializer())
         print("shape of v:", v.shape)
         v = tf.reshape(tf.squeeze(v, axis=2), [-1])
         print("shape of v after squeeze:", v.shape)
